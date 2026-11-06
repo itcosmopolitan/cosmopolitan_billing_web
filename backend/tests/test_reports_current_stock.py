@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from src.database import Base
+from src.date_utils import business_day_bounds_utc, business_today
 from src.models import (
     Branch,
     Category,
@@ -18,6 +20,7 @@ from src.models import (
     SalesOrderStatus,
     StockReservation,
     StockReservationStatus,
+    User,
 )
 from src.report_catalog import REPORT_CATEGORIES
 from src.routes.reports import current_stock, current_stock_reservations
@@ -143,7 +146,7 @@ def test_current_stock_today_uses_live_inventory_without_snapshot():
                 sort_order="asc",
                 skip=0,
                 limit=50,
-                date_to=date.today().isoformat(),
+                date_to=business_today().isoformat(),
                 db=db,
             )
             return page["items"]
@@ -162,7 +165,7 @@ def test_current_stock_past_date_reconstructs_quantity_from_movements():
     async def scenario():
         db = await _build_session()
         try:
-            today = date.today()
+            today = business_today()
             db.add_all([
                 StockMovement(
                     id="move-a-after-cutoff",
@@ -205,6 +208,68 @@ def test_current_stock_past_date_reconstructs_quantity_from_movements():
         "SKU-A": 15,
         "SKU-B": -15,
     }
+
+
+def test_current_stock_uses_ist_day_boundaries_for_sales_near_midnight():
+    async def scenario():
+        db = await _build_session()
+        try:
+            day = business_today() - timedelta(days=2)
+            movements = []
+            for label, local_time in (("early", time(0, 30)), ("late", time(23, 30))):
+                local_dt = datetime.combine(day, local_time, tzinfo=ZoneInfo("Asia/Kolkata"))
+                utc_dt = local_dt.astimezone(timezone.utc).replace(tzinfo=None)
+                movements.append(
+                    StockMovement(
+                        id=f"midnight-{label}",
+                        item_id="i1",
+                        branch_id="b1",
+                        delta=1,
+                        before_qty=19,
+                        after_qty=20,
+                        movement_type="sale",
+                        created_at=utc_dt,
+                    )
+                )
+            db.add_all(movements)
+            await db.commit()
+            selected_day = await current_stock(
+                branch_id=None,
+                search=None,
+                sort_by="product_code",
+                sort_order="asc",
+                skip=0,
+                limit=50,
+                date_to=day.isoformat(),
+                db=db,
+            )
+            previous_day = await current_stock(
+                branch_id=None,
+                search=None,
+                sort_by="product_code",
+                sort_order="asc",
+                skip=0,
+                limit=50,
+                date_to=(day - timedelta(days=1)).isoformat(),
+                db=db,
+            )
+            return selected_day, previous_day
+        finally:
+            await db.close()
+
+    selected_day, previous_day = asyncio.run(scenario())
+    selected_item = next(row for row in selected_day["items"] if row["product_code"] == "SKU-A")
+    previous_item = next(row for row in previous_day["items"] if row["product_code"] == "SKU-A")
+    assert selected_item["stock"] == 20
+    assert previous_item["stock"] == 18
+    assert selected_day["reserved_is_current"] is True
+
+
+def test_business_day_bounds_are_half_open_utc_instants():
+    day = date(2026, 11, 1)
+    start_utc, next_start_utc = business_day_bounds_utc(day)
+    assert start_utc == datetime(2026, 10, 31, 18, 30)
+    assert next_start_utc == datetime(2026, 11, 1, 18, 30)
 
 
 def test_current_stock_rows_cover_catalog_columns():
@@ -260,6 +325,15 @@ def test_current_stock_reservations_lists_active_sales_orders_for_item():
     async def scenario():
         db = await _build_session()
         try:
+            actor = User(
+                id="reservation-report-user",
+                name="Reservation Tester",
+                email="reservation@example.com",
+                hashed_password="x",
+                all_branches=True,
+            )
+            db.add(actor)
+            await db.commit()
             page = await current_stock_reservations(
                 branch_id="b1",
                 item_id="i1",
@@ -269,7 +343,7 @@ def test_current_stock_reservations_lists_active_sales_orders_for_item():
                 skip=0,
                 limit=50,
                 db=db,
-                user=None,
+                user=actor,
             )
             return page["items"]
         finally:

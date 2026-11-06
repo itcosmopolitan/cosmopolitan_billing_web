@@ -490,6 +490,9 @@ async def _seed_opening_stock(
             item_id=item.id,
             branch_id=branch_id,
             delta=int(qty),
+            movement_type="adjustment",
+            source_type="opening",
+            source_ref=item.id,
         )
 
 

@@ -19,6 +19,7 @@ import { getAmountDecimals } from '@/utils/decimalPrecision'
 import { searchReportRows } from './reportSearch'
 import { sumCurrencyValues } from './reportTotals'
 import { NOT_SET, NOT_APPLICABLE } from '@/utils/emptyValue'
+import { businessDateToday } from '@/utils/businessDate'
 
 const FAVORITES_GROUP_ID = 'favorites'
 
@@ -1157,7 +1158,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
   const [searchParams] = useSearchParams()
   const urlFilterKey = searchParams.toString()
   const urlFilters = useMemo(() => readDrilldownFilters(searchParams), [searchParams])
-  const today = useMemo(() => new Date().toISOString().slice(0, 10), [])
+  const today = useMemo(() => businessDateToday(), [])
   const isAsOfDate = Boolean(report.asOfDate)
   const reportDateMode = report.dateFilter || (isAsOfDate ? 'asOf' : 'range')
   const hasDateFilter = reportDateMode !== 'none'
@@ -1219,6 +1220,10 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     gstMode: searchParams.get('gst_mode') === 'inclusive' ? 'inclusive' : DEFAULT_GST_MODE,
   }))
   const gstMode = gstToggleVisible ? appliedFilters.gstMode : 'inclusive'
+  const historicalReservations =
+    report.id === 'current-stock'
+    && Boolean(appliedFilters.dateTo || appliedFilters.dateFrom)
+    && (appliedFilters.dateTo || appliedFilters.dateFrom) < today
   const childCounterOptions = useMemo(() => {
     const selectedBranchIds = new Set(appliedFilters.branchIds)
     return (storeBranches || [])
@@ -1923,6 +1928,11 @@ function ReportDetailPage({ report, reportMap, onBack }) {
         gstOptions={GST_MODE_OPTIONS}
         defaultGstMode={DEFAULT_GST_MODE}
       />
+      {historicalReservations && (
+        <div role="note" style={{ margin: '0 0 12px', color: 'var(--text-muted)', fontSize: 13 }}>
+          Reserved and Available quantities reflect current reservations, not reservations as of the selected date.
+        </div>
+      )}
 
       <div className="list-page-panel">
         <Card bodyPadding={false}>

@@ -15,7 +15,12 @@ from sqlalchemy.orm.attributes import flag_modified
 from pydantic import BaseModel, ConfigDict, Field
 from src import config
 from src.database import get_db
-from src.date_utils import MAX_REPORT_DATE_RANGE_DAYS, parse_date_range
+from src.date_utils import (
+    MAX_REPORT_DATE_RANGE_DAYS,
+    business_day_bounds_utc,
+    business_today,
+    parse_date_range,
+)
 from src.gst_display import (
     doc_amount_expr,
     is_exclusive,
@@ -642,11 +647,27 @@ def _sales_register_union_query(inv_conds, cn_conds):
     return inv_q.union_all(cn_q).subquery()
 
 
-def _signed_sales_docs_subquery(inv_conds, cn_conds, exclusive: bool = False):
+def _signed_sales_docs_subquery(
+    inv_conds,
+    cn_conds,
+    exclusive: bool = False,
+    include_unposted: bool = False,
+):
     """One row per invoice (+) and credit note (−) with signed totals/qty.
 
     With ``exclusive`` set, money columns are restated net of GST.
     """
+    invoice_cost = func.coalesce(Item.cost_price, 0) * SaleLineItem.qty
+    if not include_unposted:
+        invoice_cost = case(
+            (
+                SaleInvoice.status.notin_(
+                    (InvoiceStatus.draft, InvoiceStatus.pending_approval)
+                ),
+                invoice_cost,
+            ),
+            else_=literal(0.0),
+        )
     per_inv = (
         select(
             SaleInvoice.date.label("doc_date"),
@@ -670,7 +691,7 @@ def _signed_sales_docs_subquery(inv_conds, cn_conds, exclusive: bool = False):
             ).label("outstanding"),
             (func.coalesce(SaleInvoice.total, 0) - func.coalesce(SaleInvoice.tax_total, 0)).label("taxable_amount"),
             func.coalesce(func.sum(SaleLineItem.qty), 0).label("quantity_sold"),
-            func.coalesce(func.sum(func.coalesce(Item.cost_price, 0) * SaleLineItem.qty), 0).label("cost_of_sales"),
+            func.coalesce(func.sum(invoice_cost), 0).label("cost_of_sales"),
         )
         .select_from(SaleInvoice)
         .outerjoin(SaleLineItem, SaleLineItem.invoice_id == SaleInvoice.id)
@@ -738,7 +759,12 @@ def _signed_sales_docs_subquery(inv_conds, cn_conds, exclusive: bool = False):
     return per_inv.union_all(per_cn).subquery()
 
 
-def _signed_sales_lines_query(inv_conds, cn_conds, exclusive: bool = False):
+def _signed_sales_lines_query(
+    inv_conds,
+    cn_conds,
+    exclusive: bool = False,
+    include_unposted: bool = False,
+):
     """Invoice lines (positive qty/value) UNION credit-note lines (negative).
 
     With ``exclusive`` set, money columns are restated net of GST.
@@ -746,6 +772,16 @@ def _signed_sales_lines_query(inv_conds, cn_conds, exclusive: bool = False):
     _, inv_taxable, _ = _tax_line_exprs(SaleLineItem.line_total, SaleLineItem.tax_rate)
     _, cn_taxable, _ = _tax_line_exprs(SalesReturnLineItem.line_total, SalesReturnLineItem.tax_rate)
     inv_cost_stored = func.coalesce(Item.cost_price, 0) * SaleLineItem.qty
+    if not include_unposted:
+        inv_cost_stored = case(
+            (
+                SaleInvoice.status.notin_(
+                    (InvoiceStatus.draft, InvoiceStatus.pending_approval)
+                ),
+                inv_cost_stored,
+            ),
+            else_=literal(0.0),
+        )
     cn_cost_stored = func.coalesce(Item.cost_price, 0) * func.coalesce(SalesReturnLineItem.return_qty, 0)
     # Cost is GST-exclusive and never restated, so profit = taxable sales - stored cost in both modes.
     inv_q = (
@@ -1805,6 +1841,7 @@ async def sales_lines(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
     gst_mode: Optional[str] = None,
+    include_unposted: bool = False,
     db: AsyncSession = Depends(get_db),
     user: Optional[object] = Depends(current_user),
 ):
@@ -1864,7 +1901,12 @@ async def sales_lines(
             inv_conds.append(Item.category_id == category_id)
             cn_conds.append(Item.category_id == category_id)
 
-    lines = _signed_sales_lines_query(inv_conds, cn_conds, exclusive=is_exclusive(gst_mode)).subquery()
+    lines = _signed_sales_lines_query(
+        inv_conds,
+        cn_conds,
+        exclusive=is_exclusive(gst_mode),
+        include_unposted=include_unposted,
+    ).subquery()
     sort_map = {
         "invoice_number": lines.c.invoice_number,
         "invoice_date": lines.c.invoice_date,
@@ -2104,6 +2146,7 @@ async def product_sales(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     gst_mode: Optional[str] = None,
+    include_unposted: bool = False,
     db: AsyncSession = Depends(get_db),
     user: Optional[object] = Depends(current_user),
 ):
@@ -2133,7 +2176,12 @@ async def product_sales(
         inv_conds.append(SaleLineItem.name.ilike(f"%{search}%"))
         cn_conds.append(SalesReturnLineItem.name.ilike(f"%{search}%"))
 
-    lines = _signed_sales_lines_query(inv_conds, cn_conds, exclusive=is_exclusive(gst_mode)).subquery()
+    lines = _signed_sales_lines_query(
+        inv_conds,
+        cn_conds,
+        exclusive=is_exclusive(gst_mode),
+        include_unposted=include_unposted,
+    ).subquery()
     sales_sum = func.coalesce(func.sum(lines.c.line_total), 0)
     cost_sum = func.coalesce(func.sum(lines.c.cost_value), 0)
     profit_sum = func.coalesce(func.sum(lines.c.profit), 0)
@@ -2723,6 +2771,7 @@ async def category_sales(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     gst_mode: Optional[str] = None,
+    include_unposted: bool = False,
     db: AsyncSession = Depends(get_db),
     user: Optional[object] = Depends(current_user),
 ):
@@ -2752,7 +2801,12 @@ async def category_sales(
         inv_conds.append(Category.name.ilike(f"%{search}%"))
         cn_conds.append(Category.name.ilike(f"%{search}%"))
 
-    lines = _signed_sales_lines_query(inv_conds, cn_conds, exclusive=is_exclusive(gst_mode)).subquery()
+    lines = _signed_sales_lines_query(
+        inv_conds,
+        cn_conds,
+        exclusive=is_exclusive(gst_mode),
+        include_unposted=include_unposted,
+    ).subquery()
     sales_sum = func.coalesce(func.sum(lines.c.line_total), 0)
     cost_sum = func.coalesce(func.sum(lines.c.cost_value), 0)
     profit_sum = func.coalesce(func.sum(lines.c.profit), 0)
@@ -2947,6 +3001,7 @@ async def customer_sales(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     gst_mode: Optional[str] = None,
+    include_unposted: bool = False,
     db: AsyncSession = Depends(get_db),
     user: Optional[object] = Depends(current_user),
 ):
@@ -2975,7 +3030,12 @@ async def customer_sales(
         inv_conds.append(SaleInvoice.customer_name.ilike(f"%{search}%"))
         cn_conds.append(SalesReturn.customer_name.ilike(f"%{search}%"))
 
-    docs = _signed_sales_docs_subquery(inv_conds, cn_conds, exclusive=is_exclusive(gst_mode))
+    docs = _signed_sales_docs_subquery(
+        inv_conds,
+        cn_conds,
+        exclusive=is_exclusive(gst_mode),
+        include_unposted=include_unposted,
+    )
     sales_sum = func.coalesce(func.sum(docs.c.total), 0)
     cost_sum = func.coalesce(func.sum(docs.c.cost_of_sales), 0)
     taxable_sum = func.coalesce(func.sum(docs.c.taxable_amount), 0)
@@ -3441,7 +3501,9 @@ async def current_stock(
     )
     reserved_expr = func.coalesce(reserved_sq.c.reserved_qty, 0)
 
-    if as_of is not None and as_of < date.today():
+    reserved_is_current = as_of is not None and as_of < business_today()
+    if reserved_is_current:
+        _, next_start_utc = business_day_bounds_utc(as_of)
         movements_after_as_of_sq = (
             select(
                 StockMovement.item_id.label("item_id"),
@@ -3449,8 +3511,7 @@ async def current_stock(
                 func.sum(StockMovement.delta).label("quantity_change"),
             )
             .where(
-                StockMovement.created_at
-                > datetime.combine(as_of, time.max)
+                StockMovement.created_at >= next_start_utc
             )
             .group_by(StockMovement.item_id, StockMovement.branch_id)
             .subquery()
@@ -3573,10 +3634,85 @@ async def current_stock(
             0,
             1,
             summary_only=True,
+            reserved_is_current=reserved_is_current,
         )
     result = await db.execute(base.order_by(order_by_expr).offset(sk).limit(lim))
     rows = [dict(r._mapping) for r in result.fetchall()]
-    return paged(rows, total, sk, lim)
+    return paged(rows, total, sk, lim, reserved_is_current=reserved_is_current)
+
+
+@router.get("/stock-reconciliation", dependencies=[Depends(require_perm("reports.view"))])
+async def stock_reconciliation(
+    branch_id: Optional[str] = None,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+    user: Optional[object] = Depends(current_user),
+):
+    """List item/branch quantities that differ from their net movement ledger."""
+    branch_scope = await _resolve_branch_scope(user, db, branch_id)
+    if branch_scope == []:
+        sk = normalize_skip(skip)
+        lim = normalize_limit(limit)
+        return paged([], 0, sk, lim)
+
+    movement_totals = (
+        select(
+            StockMovement.item_id.label("item_id"),
+            StockMovement.branch_id.label("branch_id"),
+            func.sum(StockMovement.delta).label("ledger_quantity"),
+        )
+        .group_by(StockMovement.item_id, StockMovement.branch_id)
+        .subquery()
+    )
+    keys = (
+        select(ItemStock.item_id.label("item_id"), ItemStock.branch_id.label("branch_id"))
+        .union(
+            select(movement_totals.c.item_id, movement_totals.c.branch_id)
+        )
+        .subquery()
+    )
+    stock_quantity = func.coalesce(ItemStock.quantity, 0)
+    ledger_quantity = func.coalesce(movement_totals.c.ledger_quantity, 0)
+    conds = [stock_quantity != ledger_quantity]
+    branch_cond = _branch_condition(Branch.id, branch_id, branch_scope)
+    if branch_cond is not None:
+        conds.append(branch_cond)
+
+    base = (
+        select(
+            keys.c.item_id,
+            keys.c.branch_id,
+            Item.name.label("item_name"),
+            Branch.name.label("branch_name"),
+            stock_quantity.label("stock_quantity"),
+            ledger_quantity.label("ledger_quantity"),
+            (stock_quantity - ledger_quantity).label("difference"),
+        )
+        .select_from(keys)
+        .join(Item, Item.id == keys.c.item_id)
+        .join(Branch, Branch.id == keys.c.branch_id)
+        .outerjoin(
+            ItemStock,
+            and_(
+                ItemStock.item_id == keys.c.item_id,
+                ItemStock.branch_id == keys.c.branch_id,
+            ),
+        )
+        .outerjoin(
+            movement_totals,
+            and_(
+                movement_totals.c.item_id == keys.c.item_id,
+                movement_totals.c.branch_id == keys.c.branch_id,
+            ),
+        )
+        .where(and_(*conds))
+    )
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
+    total = int((await db.execute(select(func.count()).select_from(base.subquery()))).scalar() or 0)
+    result = await db.execute(base.order_by(Branch.name, Item.name).offset(sk).limit(lim))
+    return paged([dict(row._mapping) for row in result.fetchall()], total, sk, lim)
 
 
 @router.get("/current-stock-reservations", dependencies=[Depends(require_perm("reports.view"))])

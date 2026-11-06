@@ -47,6 +47,7 @@ async def clamp_stock_to_zero_with_ledger(
     movement_type: str = "adjustment",
     source_type: Optional[str] = None,
     source_ref: Optional[str] = None,
+    batch_id: Optional[str] = None,
     created_by: Optional[str] = None,
     notes: Optional[str] = None,
 ) -> float:
@@ -86,6 +87,7 @@ async def adjust_stock_atomic(
     movement_type: str = "adjustment",
     source_type: Optional[str] = None,
     source_ref: Optional[str] = None,
+    batch_id: Optional[str] = None,
     created_by: Optional[str] = None,
     movement_id: Optional[str] = None,
     allow_negative: bool = False,
@@ -171,6 +173,7 @@ async def adjust_stock_atomic(
         movement_type=movement_type,
         source_type=source_type,
         source_ref=source_ref,
+        batch_id=batch_id,
         created_by=created_by,
         movement_id=movement_id,
         notes=notes,
@@ -190,13 +193,26 @@ async def set_stock_atomic(
     item_id: str,
     branch_id: str,
     new_qty: float,
+    movement_type: str = "adjustment",
+    source_type: Optional[str] = "adjustment",
+    source_ref: Optional[str] = None,
+    batch_id: Optional[str] = None,
+    created_by: Optional[str] = None,
+    notes: Optional[str] = None,
 ) -> float:
-    """Set the absolute quantity (used by `items.adjust_stock`). Last-write-
-    wins is acceptable here because adjustments are deliberate operator
-    actions, not concurrent automated flows."""
+    """Set absolute stock and record the resulting delta in the same transaction."""
     if new_qty < 0:
         raise ValueError("new_qty must be >= 0")
     new_qty = as_qty(new_qty)
+    current_row = await db.execute(
+        select(ItemStock.quantity)
+        .where(
+            ItemStock.item_id == item_id,
+            ItemStock.branch_id == branch_id,
+        )
+        .with_for_update()
+    )
+    before = as_qty(current_row.scalar() or 0)
     await db.execute(
         text(
             "INSERT INTO item_stock (id, item_id, branch_id, quantity) "
@@ -210,6 +226,21 @@ async def set_stock_atomic(
             "branch_id": branch_id,
             "q": new_qty,
         },
+    )
+    delta = as_qty(new_qty - before)
+    await record_stock_movement(
+        db,
+        item_id=item_id,
+        branch_id=branch_id,
+        delta=delta,
+        before_qty=before,
+        after_qty=new_qty,
+        movement_type=movement_type,
+        source_type=source_type,
+        source_ref=source_ref,
+        batch_id=batch_id,
+        created_by=created_by,
+        notes=notes,
     )
     return new_qty
 
@@ -339,6 +370,7 @@ async def add_batch_atomic(
         movement_type=movement_type or mt,
         source_type=movement_source_type or st,
         source_ref=source_ref,
+        batch_id=batch.id,
         movement_id=movement_id,
         created_by=created_by,
     )
@@ -714,6 +746,7 @@ async def set_batch_quantity_atomic(
                 branch_id=b.branch_id,
                 delta=delta,
                 allow_negative=True,
+                batch_id=b.id,
             )
         return b
     if not qty_eq(delta, 0):
@@ -722,15 +755,20 @@ async def set_batch_quantity_atomic(
         # aggregate below zero — clamp in that case.
         try:
             await adjust_stock_atomic(
-                db, item_id=b.item_id, branch_id=b.branch_id, delta=delta
+                db,
+                item_id=b.item_id,
+                branch_id=b.branch_id,
+                delta=delta,
+                batch_id=b.id,
             )
         except ValueError:
-            await db.execute(
-                text(
-                    "UPDATE item_stock SET quantity = 0 "
-                    "WHERE item_id = :i AND branch_id = :br"
-                ),
-                {"i": b.item_id, "br": b.branch_id},
+            await set_stock_atomic(
+                db,
+                item_id=b.item_id,
+                branch_id=b.branch_id,
+                new_qty=0,
+                batch_id=b.id,
+                notes="Aggregate stock clamped to zero after batch adjustment",
             )
     return b
 

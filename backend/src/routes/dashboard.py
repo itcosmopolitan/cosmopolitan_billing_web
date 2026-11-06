@@ -8,7 +8,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import and_, case, desc, distinct, exists, func, select
+from sqlalchemy import and_, case, desc, distinct, exists, func, literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src import config
@@ -53,6 +53,7 @@ class DashboardFilters:
         category_id: Optional[str] = None,
         limit: int = Query(20, ge=1, le=500),
         cursor_date: Optional[str] = None,
+        include_unposted: bool = False,
     ):
         self.from_date = from_date if isinstance(from_date, str) else None
         self.to = to if isinstance(to, str) else None
@@ -61,6 +62,7 @@ class DashboardFilters:
         self.category_id = category_id if isinstance(category_id, str) else None
         self.limit = limit if isinstance(limit, int) else 20
         self.cursor_date = cursor_date if isinstance(cursor_date, str) else None
+        self.include_unposted = include_unposted if isinstance(include_unposted, bool) else False
 
 
 class DashboardExportRequest(BaseModel):
@@ -134,6 +136,7 @@ def _filters_dict(filters: DashboardFilters, period: Period) -> dict:
     payload = {
         "from": period.start_s,
         "to": period.end_s,
+        "include_unposted": filters.include_unposted,
     }
     for key in ("branch_id", "staff_id", "category_id"):
         value = getattr(filters, key)
@@ -211,6 +214,21 @@ def _line_conditions(filters: DashboardFilters, allowed_branch_ids: Optional[lis
     if filters.category_id:
         conds.append(Item.category_id == filters.category_id)
     return conds
+
+
+def _dashboard_cogs_expr(filters: DashboardFilters):
+    cost = func.coalesce(Item.cost_price, 0) * SaleLineItem.qty
+    if filters.include_unposted:
+        return cost
+    return case(
+        (
+            SaleInvoice.status.notin_(
+                (InvoiceStatus.draft, InvoiceStatus.pending_approval)
+            ),
+            cost,
+        ),
+        else_=literal(0.0),
+    )
 
 
 def _database_supports_materialized_views(db: AsyncSession) -> bool:
@@ -311,7 +329,7 @@ async def _line_profit_summary(
     allowed_branch_ids: Optional[list[str]],
     period: Period,
 ) -> dict:
-    if not _database_supports_materialized_views(db):
+    if not _database_supports_materialized_views(db) or not filters.include_unposted:
         conds = _line_conditions(filters, allowed_branch_ids, period)
         _, taxable, _ = _tax_line_exprs(SaleLineItem.line_total, SaleLineItem.tax_rate)
         row = (
@@ -321,7 +339,7 @@ async def _line_profit_summary(
                     func.coalesce(
                         func.sum(
                             taxable
-                            - (func.coalesce(Item.cost_price, 0) * SaleLineItem.qty)
+                            - _dashboard_cogs_expr(filters)
                         ),
                         0,
                     ).label("profit"),
@@ -431,7 +449,7 @@ async def _revenue_vs_profit(
     allowed_branch_ids: Optional[list[str]],
     period: Period,
 ) -> list[dict]:
-    if not _database_supports_materialized_views(db):
+    if not _database_supports_materialized_views(db) or not filters.include_unposted:
         conds = _line_conditions(filters, allowed_branch_ids, period)
         _, taxable, _ = _tax_line_exprs(SaleLineItem.line_total, SaleLineItem.tax_rate)
         result = await db.execute(
@@ -441,7 +459,7 @@ async def _revenue_vs_profit(
                 func.coalesce(
                     func.sum(
                         taxable
-                        - (func.coalesce(Item.cost_price, 0) * SaleLineItem.qty)
+                        - _dashboard_cogs_expr(filters)
                     ),
                     0,
                 ).label("profit"),

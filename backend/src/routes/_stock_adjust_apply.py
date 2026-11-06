@@ -49,6 +49,10 @@ async def apply_stock_adjustment(
             item_id=item_id,
             branch_id=branch_id,
             new_qty=int(new_qty),
+            movement_type="adjustment",
+            source_type="adjustment",
+            source_ref=reason,
+            notes=notes,
         )
         return {"message": "Stock adjusted"}
 
@@ -96,6 +100,10 @@ async def apply_stock_adjustment(
                 item_id=item_id,
                 branch_id=branch_id,
                 new_qty=int(new_qty),
+                movement_type="adjustment",
+                source_type="adjustment",
+                source_ref=reason,
+                notes=notes or "Batch quantities reset after adjustment consumption failed",
             )
 
     return {"message": "Stock adjusted"}

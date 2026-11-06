@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     app_title: str = "Cosmopolitan Pro API"
     app_description: str = "Multi-branch retail billing, POS, inventory, and reporting platform"
     app_version: str = "2.4.0"
+    business_timezone: str = "Asia/Kolkata"
     # Storage keys used by the frontend (`localStorage retailos_token`,
     # `retailos-app`, `retailos.db`) deliberately keep the legacy prefix so a
     # rename doesn't log every existing user out. Don't rebrand those.
