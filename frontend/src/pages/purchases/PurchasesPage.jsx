@@ -24,7 +24,7 @@ import toast from 'react-hot-toast'
 import { purchasesAPI } from '@/api'
 import { useAppStore, subscribeToBranchChanged } from '@/store'
 import { useCan } from '@/auth/permissions'
-import { fmt, exportToCSV, formatLabel, conversionStatusDisplay, linkedDocNumber } from '@/utils/helpers'
+import { fmt, fmtDate, exportToCSV, formatLabel, conversionStatusDisplay, linkedDocNumber } from '@/utils/helpers'
 import { amountInputStep } from '@/utils/decimalPrecision'
 import { SectionHeader, Card, Chip, Modal, FormGroup, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel, AutocompleteDropdown, PageActionsMenu, buildListPageMenuActions, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer } from '@/components/ui'
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
@@ -1548,6 +1548,7 @@ export default function PurchasesPage() {
                       if (id === 'po') return <th key={id}>PO #</th>
                       if (id === 'vendor') return <SortableHeader key={id} label="Vendor" sortKey="vendor_name" sortBy={grnSortBy} sortOrder={grnSortOrder} onSort={(k) => toggleSort(grnSortBy, grnSortOrder, setGrnSortBy, setGrnSortOrder, setGrnSkip, k)} />
                       if (id === 'date') return <SortableHeader key={id} label="Date" sortKey="date" sortBy={grnSortBy} sortOrder={grnSortOrder} onSort={(k) => toggleSort(grnSortBy, grnSortOrder, setGrnSortBy, setGrnSortOrder, setGrnSkip, k, 'desc')} />
+                      if (id === 'created_at') return <SortableHeader key={id} label="Created Date" sortKey="created_at" sortBy={grnSortBy} sortOrder={grnSortOrder} onSort={(k) => toggleSort(grnSortBy, grnSortOrder, setGrnSortBy, setGrnSortOrder, setGrnSkip, k, 'desc')} />
                       if (id === 'total') return <SortableHeader key={id} label="Total (MVR)" sortKey="total" sortBy={grnSortBy} sortOrder={grnSortOrder} onSort={(k) => toggleSort(grnSortBy, grnSortOrder, setGrnSortBy, setGrnSortOrder, setGrnSkip, k, 'desc')} className="text-right" align="right" />
                       if (id === 'status') return <SortableHeader key={id} label="Status" sortKey="status" sortBy={grnSortBy} sortOrder={grnSortOrder} onSort={(k) => toggleSort(grnSortBy, grnSortOrder, setGrnSortBy, setGrnSortOrder, setGrnSkip, k)} />
                       if (id === 'bill') return <th key={id}>Bill #</th>
@@ -1574,6 +1575,7 @@ export default function PurchasesPage() {
                           if (id === 'po') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{g.poNumber || NOT_SET}</td>
                           if (id === 'vendor') return <td key={id} style={{ fontWeight: 500, fontSize: 13 }}>{g.vendorName || NOT_SET}</td>
                           if (id === 'date') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{g.date}</td>
+                          if (id === 'created_at') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{fmtDate(g.createdAt)}</td>
                           if (id === 'total') return <td key={id} className="text-right mono" style={{ fontWeight: 600 }}>{fmt(g.total || 0)}</td>
                           if (id === 'status') return <td key={id}><Chip status={g.status} /></td>
                           if (id === 'bill') {

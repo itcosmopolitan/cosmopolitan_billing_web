@@ -4057,6 +4057,7 @@ def _grn_dict(g, items=None, *, converted_bill_number=None):
         "purchaseOrderId": g.purchase_order_id,
         "poNumber": g.po_number,
         "date": g.date,
+        "createdAt": g.created_at,
         "subtotal": g.subtotal,
         "taxTotal": g.tax_total,
         "discount": g.discount,

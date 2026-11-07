@@ -186,6 +186,7 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("po", "PO #"),
         _col("vendor", "Vendor"),
         _col("date", "Date"),
+        _col("created_at", "Created Date"),
         _col("total", "Total"),
         _col("status", "Status", locked=True),
         _col("bill", "Bill #"),
