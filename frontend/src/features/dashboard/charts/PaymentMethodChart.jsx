@@ -1,6 +1,6 @@
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { axisStyle, chartColors, gridStroke } from '../utils/chartConfig'
-import { formatCompactCurrency } from '../utils/formatCurrency'
+import { formatCompactCurrency, formatCurrency } from '../utils/formatCurrency'
 
 export default function PaymentMethodChart({ data = [] }) {
   return (
@@ -9,7 +9,7 @@ export default function PaymentMethodChart({ data = [] }) {
         <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} vertical={false} />
         <XAxis dataKey="method" tick={axisStyle} tickLine={false} axisLine={false} />
         <YAxis tick={axisStyle} tickLine={false} axisLine={false} tickFormatter={formatCompactCurrency} />
-        <Tooltip cursor={{ fill: 'transparent' }} formatter={(value) => formatCompactCurrency(value)} contentStyle={tooltipStyle} />
+        <Tooltip cursor={{ fill: 'transparent' }} formatter={(value) => formatCurrency(value)} contentStyle={tooltipStyle} />
         <Bar dataKey="amount" name="Amount (MVR)" fill={chartColors.primary} radius={[4, 4, 0, 0]} cursor={{ fill: 'transparent' }} />
       </BarChart>
     </ResponsiveContainer>

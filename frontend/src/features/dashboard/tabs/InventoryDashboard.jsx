@@ -1,16 +1,13 @@
-import { useMemo } from 'react'
 import CategoryPieChart from '../charts/CategoryPieChart'
-import SalesTrendChart from '../charts/SalesTrendChart'
 import ChartCard from '../components/ChartCard'
+import CompactCurrency from '../components/CompactCurrency'
 import DataTable from '../components/DataTable'
 import KpiCard from '../components/KpiCard'
 import { useDashboardQuery } from '../hooks/useDashboardQuery'
-import { formatCompactCurrency, formatNumber, formatPercent } from '../utils/formatCurrency'
+import { formatNumber, formatPercent } from '../utils/formatCurrency'
 
-const spark = (rows = [], key) => rows.map((row) => ({ value: row[key] || 0 }))
-
-export default function InventoryDashboard({ filters, autoRefresh }) {
-  const query = useDashboardQuery('inventory', filters, { autoRefresh })
+export default function InventoryDashboard({ filters, autoRefresh, refreshToken, onUpdatedAt }) {
+  const query = useDashboardQuery('inventory', filters, { autoRefresh, refreshToken, onUpdatedAt })
   const data = query.data || {}
   const loading = query.isLoading && !query.data
   const kpis = data.kpis || {}
@@ -18,22 +15,23 @@ export default function InventoryDashboard({ filters, autoRefresh }) {
   const charts = data.charts || {}
   const tables = data.tables || {}
   const analytics = data.analytics || {}
-  const valueSpark = useMemo(() => spark(charts.inventory_value_trend, 'value'), [charts.inventory_value_trend])
-
   return (
     <div style={{ display: 'grid', gap: 16 }}>
       <div className="grid-kpi">
-        <KpiCard title="Inventory Value (MVR)" value={formatCompactCurrency(kpis.inventory_value)} delta={deltas.inventory_value} tone="neutral" sparkline={valueSpark} loading={loading} />
-        <KpiCard title="Products" value={formatNumber(kpis.products)} delta={deltas.products} tone="info" sparkline={valueSpark} loading={loading} />
-        <KpiCard title="Out of Stock" value={formatNumber(kpis.out_of_stock)} delta={deltas.out_of_stock} tone="danger" sparkline={valueSpark} loading={loading} />
-        <KpiCard title="Low Stock" value={formatNumber(kpis.low_stock)} delta={deltas.low_stock} tone="warning" sparkline={valueSpark} loading={loading} />
+        <KpiCard title="Inventory Value (MVR)" tooltip="Current quantity × current Item.cost_price. Ignores date range and KAM; Branch and Category apply." value={<CompactCurrency value={kpis.inventory_value} />} delta={deltas.inventory_value} tone="neutral" loading={loading} />
+        <KpiCard title="Products" tooltip="Current active stock rows. Ignores date range and KAM; Branch and Category apply." value={formatNumber(kpis.products)} delta={deltas.products} tone="info" loading={loading} />
+        <KpiCard title="Out of Stock" tooltip="Current active stock rows with quantity <= 0. Ignores date range and KAM; Branch and Category apply." value={formatNumber(kpis.out_of_stock)} delta={deltas.out_of_stock} tone="danger" loading={loading} />
+        <KpiCard title="Low Stock" tooltip="Current active stock rows with 0 < quantity <= reorder level. Ignores date range and KAM; Branch and Category apply." value={formatNumber(kpis.low_stock)} delta={deltas.low_stock} tone="warning" loading={loading} />
       </div>
 
-      <div className="grid-3">
-        <ChartCard title="Inventory Value Trend (MVR)" loading={loading}>
-          <SalesTrendChart data={charts.inventory_value_trend || []} valueKey="value" label="Inventory Value (MVR)" />
-        </ChartCard>
+      <div className="grid-2">
         <ChartCard title="Fast vs Slow Moving" loading={loading}>
+          <div
+            title="Fast = active SKUs with positive stock and at least one finalized sale in the selected range. Slow = active SKUs with positive stock and no finalized sale. Both counts use only active SKUs with stock rows; Branch, KAM, Category, and date range apply. Out-of-stock SKUs are excluded."
+            style={{ marginBottom: 8, fontSize: 11, color: 'var(--text-muted)' }}
+          >
+            Counts cover active SKUs with positive stock only; hover for the rule.
+          </div>
           <CategoryPieChart
             data={charts.fast_vs_slow_moving || []}
             nameKey="segment"
@@ -43,7 +41,9 @@ export default function InventoryDashboard({ filters, autoRefresh }) {
           />
         </ChartCard>
         <ChartCard title="Stock by Category (MVR)" loading={loading}>
-          <CategoryPieChart data={charts.stock_by_category || []} nameKey="category" valueKey="value" />
+          <div title="Current stock value is quantity × current Item.cost_price. Ignores date range and KAM; Branch and Category apply. Others reconciles the remaining value.">
+            <CategoryPieChart data={charts.stock_by_category || []} nameKey="category" valueKey="value" />
+          </div>
         </ChartCard>
       </div>
 
@@ -53,12 +53,16 @@ export default function InventoryDashboard({ filters, autoRefresh }) {
       </div>
 
       <div className="grid-2">
-        <DataTable title="Current Stock" loading={loading} rows={tables.current_stock?.items || []} columns={stockColumns} />
-        <DataTable title="Low Stock" loading={loading} rows={tables.low_stock?.items || []} columns={lowStockColumns} />
+        <div title="Current stock ignores date range and KAM; Branch and Category apply."><DataTable title="Current Stock" loading={loading} rows={tables.current_stock?.items || []} columns={stockColumns} /></div>
+        <div title="Current stock ignores date range and KAM; Branch and Category apply."><DataTable title="Low Stock (0 < qty <= reorder level)" loading={loading} rows={tables.low_stock?.items || []} columns={lowStockColumns} /></div>
       </div>
       <div className="grid-2">
-        <DataTable title="Dead Stock" loading={loading} rows={tables.dead_stock?.items || []} columns={deadStockColumns} />
-        <DataTable title="Expiry Near" loading={loading} rows={tables.expiry_near?.items || []} columns={expiryColumns} />
+        <div title="Current stock ignores date range and KAM; Branch and Category apply."><DataTable title="Out of Stock (qty <= 0)" loading={loading} rows={tables.out_of_stock?.items || []} columns={outOfStockColumns} /></div>
+        <div title="Stock quantity is current; the selected date range and KAM define whether an item had finalized sales. Branch and Category apply."><DataTable title="Dead Stock" loading={loading} rows={tables.dead_stock?.items || []} columns={deadStockColumns} /></div>
+      </div>
+      <div className="grid-2">
+        <div title="Expiry status uses business-local today and ignores date range and KAM; Branch and Category apply."><DataTable title="Expired (expiry before business-local today)" loading={loading} rows={tables.expired?.items || []} columns={expiryColumns} /></div>
+        <div title="Expiry status uses business-local today and ignores date range and KAM; Branch and Category apply."><DataTable title="Expiring in 30 Days (including today)" loading={loading} rows={tables.expiring_30_days?.items || []} columns={expiryColumns} /></div>
       </div>
     </div>
   )
@@ -81,7 +85,7 @@ function FifoFefoPanel({ data = {} }) {
   const status = coverage >= 75 ? 'Covered' : coverage >= 45 ? 'Partial' : 'Review'
 
   return (
-    <div className="card">
+    <div className="card" title="Current active batches and expiry coverage. Ignores date range and KAM; Branch and Category apply.">
       <div className="card-header" style={{ padding: '12px 16px' }}>
         <h4 style={{ margin: 0, flex: 1 }}>FIFO / FEFO Insights</h4>
         <StatusPill tone={tone} background={toneBg}>{status}</StatusPill>
@@ -108,30 +112,23 @@ function FifoFefoPanel({ data = {} }) {
 
 function BatchMovementPanel({ data = {} }) {
   const received = Number(data?.received_batches || 0)
-  const consumed = Number(data?.consumed_batches || 0)
+  const consumed = Number(data?.stock_out_movements || 0)
   const deadStock = Number(data?.dead_stock_skus || 0)
-  const totalMovement = received + consumed
-  const consumedPct = totalMovement ? (consumed / totalMovement) * 100 : 0
-  const receivedPct = totalMovement ? (received / totalMovement) * 100 : 0
+  const totalMovement = Number(data?.movement_records || 0)
   const deadTone = deadStock > 0 ? 'var(--amber)' : 'var(--green)'
   const deadBg = deadStock > 0 ? 'var(--amber-bg)' : 'var(--green-bg)'
 
   return (
-    <div className="card">
+    <div className="card" title="Batch received dates and stock movement dates follow the selected range. Branch and Category apply; KAM does not apply to inventory movements.">
       <div className="card-header" style={{ padding: '12px 16px' }}>
-        <h4 style={{ margin: 0, flex: 1 }}>Batch Movement</h4>
+        <h4 style={{ margin: 0, flex: 1 }}>Batch & Stock Movement</h4>
         <StatusPill tone={deadTone} background={deadBg}>{deadStock > 0 ? 'Watch list' : 'Clear'}</StatusPill>
       </div>
       <div className="card-body" style={{ padding: 18 }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12, marginBottom: 18 }}>
-          <MiniMetric label="Received" value={formatNumber(received)} emphasis />
-          <MiniMetric label="Consumed" value={formatNumber(consumed)} />
+          <MiniMetric label={data?.received_label || 'Batches received'} value={formatNumber(received)} emphasis title={data?.received_tooltip} />
+          <MiniMetric label={data?.consumed_label || 'Stock-out movement records'} value={formatNumber(consumed)} title={data?.consumed_tooltip} />
           <MiniMetric label="Dead stock" value={formatNumber(deadStock)} tone={deadTone} />
-        </div>
-
-        <div style={{ display: 'grid', gap: 12 }}>
-          <ProgressLine label="Receiving share" value={receivedPct} tone="var(--blue)" />
-          <ProgressLine label="Consumption share" value={consumedPct} tone="var(--green)" />
         </div>
 
         <div
@@ -146,8 +143,8 @@ function BatchMovementPanel({ data = {} }) {
             fontSize: 12,
           }}
         >
-          <span style={{ color: 'var(--text-muted)', fontWeight: 700 }}>Movement volume</span>
-          <span style={{ color: 'var(--text-primary)', fontWeight: 800 }}>{formatNumber(totalMovement)} batches</span>
+          <span style={{ color: 'var(--text-muted)', fontWeight: 700 }}>Stock movement records</span>
+          <span style={{ color: 'var(--text-primary)', fontWeight: 800 }}>{formatNumber(totalMovement)}</span>
         </div>
       </div>
     </div>
@@ -203,10 +200,10 @@ function StatusPill({ tone, background, children }) {
   )
 }
 
-function MiniMetric({ label, value, emphasis = false, tone }) {
+function MiniMetric({ label, value, emphasis = false, tone, title }) {
   return (
     <div style={{ minWidth: 0, borderTop: '1px solid var(--border-subtle)', paddingTop: 10 }}>
-      <div style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 700, marginBottom: 5 }}>{label}</div>
+      <div title={title} style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 700, marginBottom: 5 }}>{label}</div>
       <div
         style={{
           fontSize: emphasis ? 20 : 17,
@@ -243,11 +240,19 @@ const stockColumns = [
   { key: 'name', header: 'Product' },
   { key: 'branch', header: 'Branch' },
   { key: 'qty', header: 'Qty', align: 'right', width: 72, render: (row) => formatNumber(row.qty) },
-  { key: 'value', header: 'Value (MVR)', align: 'right', render: (row) => formatCompactCurrency(row.value) },
+  { key: 'value', header: 'Value (MVR)', align: 'right', render: (row) => <CompactCurrency value={row.value} /> },
 ]
 
 const lowStockColumns = [
   { key: 'name', header: 'Product' },
+  { key: 'branch', header: 'Branch' },
+  { key: 'qty', header: 'Qty', align: 'right', width: 72, render: (row) => formatNumber(row.qty) },
+  { key: 'reorder_level', header: 'Reorder', align: 'right', width: 82, render: (row) => formatNumber(row.reorder_level) },
+]
+
+const outOfStockColumns = [
+  { key: 'name', header: 'Product' },
+  { key: 'branch', header: 'Branch' },
   { key: 'qty', header: 'Qty', align: 'right', width: 72, render: (row) => formatNumber(row.qty) },
   { key: 'reorder_level', header: 'Reorder', align: 'right', width: 82, render: (row) => formatNumber(row.reorder_level) },
 ]
@@ -255,7 +260,7 @@ const lowStockColumns = [
 const deadStockColumns = [
   { key: 'name', header: 'Product' },
   { key: 'qty', header: 'Qty', align: 'right', width: 72, render: (row) => formatNumber(row.qty) },
-  { key: 'value', header: 'Value (MVR)', align: 'right', render: (row) => formatCompactCurrency(row.value) },
+  { key: 'value', header: 'Value (MVR)', align: 'right', render: (row) => <CompactCurrency value={row.value} /> },
 ]
 
 const expiryColumns = [

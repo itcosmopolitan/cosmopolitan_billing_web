@@ -1,7 +1,6 @@
 import * as Icon from '@/components/ui/Icons'
 import { AutocompleteDropdown } from '@/components/ui'
-import { AUTOCOMPLETE_STAFF_URL, AUTOCOMPLETE_CATEGORY_URL } from '@/api'
-import ExportMenu from './ExportMenu'
+import { AUTOCOMPLETE_CATEGORY_URL } from '@/api'
 
 export default function DashboardHeader({
   filters,
@@ -10,9 +9,7 @@ export default function DashboardHeader({
   onReset,
   onRefresh,
   isFetching,
-  autoRefresh,
-  onToggleAutoRefresh,
-  onExport,
+  updatedAt,
 }) {
   return (
     <div className="card" style={{ marginBottom: 16, overflow: 'visible' }}>
@@ -38,15 +35,18 @@ export default function DashboardHeader({
                 isSearchFieldRequired={false}
               />
             </FilterField>
-            <FilterField label="Staff">
+            <FilterField label="Staff / KAM">
               <AutocompleteDropdown
                 value={filters.staff_id}
                 onChange={(v) => onFilterChange('staff_id', v)}
-                fetchUrl={AUTOCOMPLETE_STAFF_URL}
-                prependOptions={[{ id: '', label: 'All staff' }]}
+                options={(filterOptions.staff || []).map((option) => ({
+                  id: option.id,
+                  label: option.name,
+                }))}
+                prependOptions={[{ id: '', label: 'All KAMs' }]}
                 isSearchFieldRequired
-                placeholder="All staff"
-                searchPlaceholder="Search staff…"
+                placeholder="All KAMs"
+                searchPlaceholder="Search KAMs…"
               />
             </FilterField>
             <FilterField label="Category">
@@ -66,6 +66,18 @@ export default function DashboardHeader({
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginLeft: 'auto' }}>
+            {updatedAt ? (
+              <span
+                title={new Date(updatedAt).toLocaleString('en-MV', { timeZone: 'Indian/Maldives' })}
+                style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}
+              >
+                Updated at {new Date(updatedAt).toLocaleTimeString('en-MV', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  timeZone: 'Indian/Maldives',
+                })}
+              </span>
+            ) : null}
             {isFetching ? (
               <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>
                 <Icon.RefreshCw size={14} className="spinner" />

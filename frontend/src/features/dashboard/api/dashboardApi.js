@@ -8,7 +8,7 @@ const cleanParams = (filters = {}) => {
   return params
 }
 
-export const getDashboardFilters = () => api.get('/dashboard/filters')
+export const getDashboardFilters = (filters) => api.get('/dashboard/filters', { params: cleanParams(filters) })
 export const getDashboardSummary = (filters) => api.get('/dashboard/summary', { params: cleanParams(filters) })
 export const getSalesDashboard = (filters) => api.get('/dashboard/sales', { params: cleanParams(filters) })
 export const getInventoryDashboard = (filters) => api.get('/dashboard/inventory', { params: cleanParams(filters) })

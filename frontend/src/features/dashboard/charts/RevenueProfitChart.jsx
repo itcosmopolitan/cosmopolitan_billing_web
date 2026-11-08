@@ -1,6 +1,6 @@
 import { Area, AreaChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { axisStyle, chartColors, gridStroke } from '../utils/chartConfig'
-import { formatCompactCurrency } from '../utils/formatCurrency'
+import { formatCompactCurrency, formatCurrency } from '../utils/formatCurrency'
 
 export default function RevenueProfitChart({ data = [] }) {
   return (
@@ -9,9 +9,9 @@ export default function RevenueProfitChart({ data = [] }) {
         <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} vertical={false} />
         <XAxis dataKey="date" tick={axisStyle} tickLine={false} axisLine={false} minTickGap={16} />
         <YAxis tick={axisStyle} tickLine={false} axisLine={false} tickFormatter={formatCompactCurrency} />
-        <Tooltip formatter={(value) => formatCompactCurrency(value)} contentStyle={tooltipStyle} />
+        <Tooltip formatter={(value) => formatCurrency(value)} contentStyle={tooltipStyle} />
         <Legend wrapperStyle={{ fontSize: 12 }} />
-        <Area type="monotone" dataKey="revenue" name="Revenue (MVR)" stroke={chartColors.blue} fill={chartColors.blue} fillOpacity={0.12} dot={false} />
+        <Area type="monotone" dataKey="revenue" name="Revenue excl. GST (MVR)" stroke={chartColors.blue} fill={chartColors.blue} fillOpacity={0.12} dot={false} />
         <Area type="monotone" dataKey="profit" name="Profit (MVR)" stroke={chartColors.emerald} fill={chartColors.emerald} fillOpacity={0.12} dot={false} />
       </AreaChart>
     </ResponsiveContainer>

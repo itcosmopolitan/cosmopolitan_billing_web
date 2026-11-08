@@ -1,74 +1,108 @@
 import PaymentMethodChart from '../charts/PaymentMethodChart'
 import SalesTrendChart from '../charts/SalesTrendChart'
 import ChartCard from '../components/ChartCard'
+import CompactCurrency from '../components/CompactCurrency'
 import DataTable from '../components/DataTable'
 import KpiCard from '../components/KpiCard'
 import { useDashboardQuery } from '../hooks/useDashboardQuery'
-import { formatCompactCurrency, formatNumber, formatPercent } from '../utils/formatCurrency'
+import { formatNumber, formatPercent } from '../utils/formatCurrency'
 
-const spark = (rows = [], key) => rows.map((row) => ({ value: row[key] || 0 }))
+const spark = (rows = [], key) => (Array.isArray(rows) ? rows : []).map((row) => ({ value: row[key] || 0 }))
 
-export default function BillingDashboard({ filters, autoRefresh }) {
-  const query = useDashboardQuery('billing', filters, { autoRefresh })
+export default function BillingDashboard({ filters, autoRefresh, refreshToken, onUpdatedAt }) {
+  const query = useDashboardQuery('billing', filters, { autoRefresh, refreshToken, onUpdatedAt })
   const data = query.data || {}
   const loading = query.isLoading && !query.data
   const kpis = data.kpis || {}
   const deltas = data.deltas || {}
+  const deltaValues = data.delta_values || {}
   const charts = data.charts || {}
   const tables = data.tables || {}
   const analytics = data.analytics || {}
+  const categoryFiltered = Boolean(filters.category_id)
 
   return (
     <div style={{ display: 'grid', gap: 16 }}>
-      <div className="grid-kpi">
-        <KpiCard title="Cash (MVR)" value={formatCompactCurrency(kpis.cash)} delta={deltas.cash} tone="success" sparkline={spark(charts.payment_distribution, 'amount')} loading={loading} />
-        <KpiCard title="Card (MVR)" value={formatCompactCurrency(kpis.card)} delta={deltas.card} tone="info" sparkline={spark(charts.payment_distribution, 'amount')} loading={loading} />
-        <KpiCard title="UPI (MVR)" value={formatCompactCurrency(kpis.upi)} delta={deltas.upi} tone="neutral" sparkline={spark(charts.payment_distribution, 'amount')} loading={loading} />
-        <KpiCard title="Pending Payments (MVR)" value={formatCompactCurrency(kpis.pending_payments)} delta={deltas.pending_payments} tone="warning" sparkline={spark(charts.daily_billing_count, 'count')} loading={loading} />
-        <KpiCard title="Refunds (MVR)" value={formatCompactCurrency(kpis.refunds)} delta={deltas.refunds} tone="danger" sparkline={spark(charts.refund_trends, 'refunds')} loading={loading} />
-        <KpiCard title="Discounts (MVR)" value={formatCompactCurrency(kpis.discounts)} delta={deltas.discounts} tone="warning" sparkline={spark(charts.daily_billing_count, 'count')} loading={loading} />
+      {categoryFiltered ? (
+        <div role="status" className="card" style={{ padding: '12px 16px', color: 'var(--text-secondary)' }}>
+          Payment and balance figures aren&apos;t available per category. Clear the category filter to see them.
+        </div>
+      ) : null}
+      <div className="billing-kpi-grid">
+        <KpiCard title="Cash (MVR)" value={categoryFiltered ? 'N/A' : <CompactCurrency value={kpis.cash} />} delta={deltas.cash} deltaTooltip={formatDeltaValues(deltaValues.cash)} tone="success" sparkline={spark(charts.payment_distribution, 'amount')} loading={loading} />
+        <KpiCard title="Card (MVR)" value={categoryFiltered ? 'N/A' : <CompactCurrency value={kpis.card} />} delta={deltas.card} deltaTooltip={formatDeltaValues(deltaValues.card)} tone="info" sparkline={spark(charts.payment_distribution, 'amount')} loading={loading} />
+        <KpiCard title="UPI (MVR)" value={categoryFiltered ? 'N/A' : <CompactCurrency value={kpis.upi} />} delta={deltas.upi} deltaTooltip={formatDeltaValues(deltaValues.upi)} tone="neutral" sparkline={spark(charts.payment_distribution, 'amount')} loading={loading} />
+        <KpiCard title="Bank Transfer (MVR)" value={categoryFiltered ? 'N/A' : <CompactCurrency value={kpis.transfer} />} delta={deltas.transfer} deltaTooltip={formatDeltaValues(deltaValues.transfer)} tone="info" sparkline={spark(charts.payment_distribution, 'amount')} loading={loading} />
+        <KpiCard title="Credit (MVR)" value={categoryFiltered ? 'N/A' : <CompactCurrency value={kpis.credit} />} delta={deltas.credit} deltaTooltip={formatDeltaValues(deltaValues.credit)} tone="warning" sparkline={spark(charts.payment_distribution, 'amount')} loading={loading} />
+        <KpiCard title="Other Payments (MVR)" value={categoryFiltered ? 'N/A' : <CompactCurrency value={kpis.other} />} delta={deltas.other} deltaTooltip={formatDeltaValues(deltaValues.other)} tone="neutral" sparkline={spark(charts.payment_distribution, 'amount')} loading={loading} />
+        <KpiCard title="Pending Payments (MVR)" value={categoryFiltered ? 'N/A' : <CompactCurrency value={kpis.pending_payments} />} delta={deltas.pending_payments} deltaTooltip={formatDeltaValues(deltaValues.pending_payments)} tone="warning" sparkline={spark(charts.daily_billing_count, 'count')} loading={loading} />
+        <KpiCard title="Returned Value (MVR)" value={<CompactCurrency value={kpis.refunds} />} delta={deltas.refunds} deltaTooltip={formatDeltaValues(deltaValues.refunds)} tone="danger" sparkline={spark(charts.refund_trends, 'refunds')} loading={loading} />
+        <KpiCard title="Tax Collected (MVR)" tooltip="GST on finalized invoices by invoice date minus tax on non-void returns by return date. Uses the Tax Summary report's tax-inclusive line calculation." value={<CompactCurrency value={kpis.tax_collected} />} tone="info" loading={loading} />
+        <KpiCard
+          title="Actually Refunded / Credited (MVR)"
+          value={categoryFiltered ? 'N/A' : <CompactCurrency value={kpis.credited_refunds} />}
+          detail={categoryFiltered ? 'Not attributable by category' : undefined}
+          delta={deltas.credited_refunds}
+          deltaTooltip={formatDeltaValues(deltaValues.credited_refunds)}
+          tone="danger"
+          sparkline={categoryFiltered ? [] : spark(charts.refund_trends, 'credited_refunds')}
+          loading={loading}
+        />
+        <KpiCard title="Discounts (MVR)" value={categoryFiltered ? 'N/A' : <CompactCurrency value={kpis.discounts} />} delta={deltas.discounts} deltaTooltip={formatDeltaValues(deltaValues.discounts)} tone="warning" sparkline={spark(charts.daily_billing_count, 'count')} loading={loading} />
+        <KpiCard
+          title={categoryFiltered ? 'Category Invoices Due' : 'Invoices Due'}
+          tooltip="Count of finalized invoices with an outstanding balance in the selected date range. Respects Branch, KAM, and Category filters."
+          value={formatNumber(analytics.pending_invoice_count)}
+          tone="warning"
+          loading={loading}
+        />
       </div>
 
       <div className="grid-3">
         <ChartCard title="Payment Distribution (MVR)" loading={loading}>
-          <PaymentMethodChart data={charts.payment_distribution || []} />
+          {categoryFiltered ? <UnavailableByCategory /> : <PaymentMethodChart data={charts.payment_distribution || []} />}
         </ChartCard>
-        <ChartCard title="Refund Trends (MVR)" loading={loading}>
-          <SalesTrendChart data={charts.refund_trends || []} valueKey="refunds" label="Refunds (MVR)" />
+        <ChartCard title="Returned Value Trends (MVR)" loading={loading}>
+          <SalesTrendChart data={charts.refund_trends || []} valueKey="refunds" label="Returned value (MVR)" />
         </ChartCard>
-        <ChartCard title="Daily Billing Count" loading={loading}>
+        <ChartCard title={categoryFiltered ? 'Daily Invoices Containing This Category' : 'Daily Billing Count'} loading={loading}>
           <SalesTrendChart data={charts.daily_billing_count || []} valueKey="count" label="Bills" />
         </ChartCard>
       </div>
 
       <div className="grid-2">
-        <CollectionEfficiencyPanel analytics={analytics} kpis={kpis} />
-        <DataTable title="Pending Payments" loading={loading} rows={tables.pending_payments?.items || []} columns={pendingColumns} />
+        <CollectionEfficiencyPanel analytics={analytics} kpis={kpis} categoryFiltered={categoryFiltered} />
+        <DataTable title={categoryFiltered ? 'Pending Invoices Containing This Category' : 'Pending Payments'} loading={loading} rows={tables.pending_payments?.items || []} columns={pendingColumns} />
       </div>
 
       <div className="grid-2">
-        <DataTable title="Recent Refunds" loading={loading} rows={tables.recent_refunds?.items || []} columns={refundColumns} />
-        <DataTable title="Discounted Bills" loading={loading} rows={tables.discounted_bills?.items || []} columns={discountColumns} />
+        <DataTable title={categoryFiltered ? 'Recent Returns Containing This Category' : 'Recent Refunds'} loading={loading} rows={tables.recent_refunds?.items || []} columns={refundColumns} />
+        <DataTable title={categoryFiltered ? 'Invoices Containing This Category With Discounts' : 'Discounted Bills'} loading={loading} rows={tables.discounted_bills?.items || []} columns={discountColumns} />
       </div>
     </div>
   )
 }
 
-function CollectionEfficiencyPanel({ analytics = {}, kpis = {} }) {
-  const efficiency = Number(analytics.collection_efficiency || 0)
+function CollectionEfficiencyPanel({ analytics = {}, kpis = {}, categoryFiltered = false }) {
+  const efficiency = analytics.collection_efficiency == null ? null : Number(analytics.collection_efficiency)
   const refundPct = Number(analytics.refund_percentage || 0)
   const pendingCount = Number(analytics.pending_invoice_count || 0)
-  const pendingAmount = Number(kpis.pending_payments || 0)
-  const collected = Number(kpis.cash || 0) + Number(kpis.card || 0) + Number(kpis.upi || 0)
-  const cappedEfficiency = Math.min(100, Math.max(0, efficiency))
-  const tone = efficiency >= 92 ? 'var(--green)' : efficiency >= 80 ? 'var(--blue)' : 'var(--amber)'
-  const toneBg = efficiency >= 92 ? 'var(--green-bg)' : efficiency >= 80 ? 'var(--blue-bg)' : 'var(--amber-bg)'
-  const status = efficiency >= 92 ? 'Strong' : efficiency >= 80 ? 'Healthy' : 'Follow up'
+  const pendingAmount = kpis.pending_payments == null ? null : Number(kpis.pending_payments)
+  const collected = kpis.collected == null ? null : Number(kpis.collected)
+  const cappedEfficiency = efficiency == null ? 0 : Math.min(100, Math.max(0, efficiency))
+  const tone = efficiency == null ? 'var(--text-muted)' : efficiency >= 92 ? 'var(--green)' : efficiency >= 80 ? 'var(--blue)' : 'var(--amber)'
+  const toneBg = efficiency == null ? 'var(--bg-raised)' : efficiency >= 92 ? 'var(--green-bg)' : efficiency >= 80 ? 'var(--blue-bg)' : 'var(--amber-bg)'
+  const status = efficiency == null ? 'Unavailable' : efficiency >= 92 ? 'Strong' : efficiency >= 80 ? 'Healthy' : 'Follow up'
 
   return (
     <div className="card">
       <div className="card-header" style={{ padding: '12px 16px' }}>
-        <h4 style={{ margin: 0, flex: 1 }}>Collection Efficiency</h4>
+        <h4
+          title="(Invoice paid_amount - refunds actually credited) / net revenue. This equals 1 - outstanding / net revenue when invoice, return, and balance amounts reconcile."
+          style={{ margin: 0, flex: 1 }}
+        >
+          Collection Efficiency
+        </h4>
         <span
           style={{
             fontSize: 11,
@@ -106,7 +140,7 @@ function CollectionEfficiencyPanel({ analytics = {}, kpis = {} }) {
               }}
             >
               <div>
-                <div style={{ fontSize: 25, lineHeight: 1, fontWeight: 800 }}>{formatPercent(efficiency)}</div>
+                <div style={{ fontSize: 25, lineHeight: 1, fontWeight: 800 }}>{efficiency == null ? 'N/A' : formatPercent(efficiency)}</div>
                 <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-muted)', fontWeight: 700 }}>
                   Collected
                 </div>
@@ -116,13 +150,15 @@ function CollectionEfficiencyPanel({ analytics = {}, kpis = {} }) {
 
           <div style={{ minWidth: 0 }}>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12 }}>
-              <CollectionMetric label="Collected (MVR)" value={formatCompactCurrency(collected)} emphasis />
-              <CollectionMetric label="Pending (MVR)" value={formatCompactCurrency(pendingAmount)} />
-              <CollectionMetric label="Invoices due" value={formatNumber(pendingCount)} />
+              <CollectionMetric label="Collected (MVR)" value={collected == null ? 'N/A' : <CompactCurrency value={collected} />} emphasis />
+              <CollectionMetric label="Pending (MVR)" value={pendingAmount == null ? 'N/A' : <CompactCurrency value={pendingAmount} />} />
+              <CollectionMetric label={categoryFiltered ? 'Pending invoices containing this category' : 'Invoices due'} value={formatNumber(pendingCount)} />
             </div>
 
             <div style={{ display: 'grid', gap: 12, marginTop: 18 }}>
-              <ProgressMetric label="Collection rate" value={efficiency} tone={tone} />
+              {efficiency == null ? (
+                <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Collection rate: N/A</div>
+              ) : <ProgressMetric label="Collection rate" value={efficiency} tone={tone} />}
               <ProgressMetric label="Refund rate" value={refundPct} tone="var(--red)" />
             </div>
           </div>
@@ -130,6 +166,19 @@ function CollectionEfficiencyPanel({ analytics = {}, kpis = {} }) {
       </div>
     </div>
   )
+}
+
+function UnavailableByCategory() {
+  return (
+    <div style={{ height: 240, display: 'grid', placeItems: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
+      Not attributable by category
+    </div>
+  )
+}
+
+function formatDeltaValues(values) {
+  if (!values) return undefined
+  return `Previous: MVR ${Number(values.previous || 0).toFixed(2)}; Current: MVR ${Number(values.current || 0).toFixed(2)}`
 }
 
 function CollectionMetric({ label, value, emphasis = false }) {
@@ -178,17 +227,20 @@ function ProgressMetric({ label, value, tone }) {
 const pendingColumns = [
   { key: 'number', header: 'Invoice' },
   { key: 'customer', header: 'Customer' },
-  { key: 'balance', header: 'Balance (MVR)', align: 'right', render: (row) => formatCompactCurrency(row.balance) },
+  { key: 'balance', header: 'Balance (MVR)', align: 'right', render: (row) => row.balance == null ? 'N/A' : <CompactCurrency value={row.balance} /> },
+  { key: 'due_date', header: 'Due date' },
+  { key: 'overdue', header: 'Overdue', render: (row) => row.overdue ? 'Yes' : 'No' },
 ]
 
 const refundColumns = [
   { key: 'number', header: 'Credit Note' },
   { key: 'customer', header: 'Customer' },
-  { key: 'amount', header: 'Amount (MVR)', align: 'right', render: (row) => formatCompactCurrency(row.amount) },
+  { key: 'amount', header: 'Returned (MVR)', align: 'right', render: (row) => <CompactCurrency value={row.amount} /> },
+  { key: 'credited_amount', header: 'Refunded / Credited (MVR)', align: 'right', render: (row) => row.credited_amount == null ? 'N/A' : <CompactCurrency value={row.credited_amount} /> },
 ]
 
 const discountColumns = [
   { key: 'number', header: 'Invoice' },
   { key: 'customer', header: 'Customer' },
-  { key: 'discount', header: 'Discount (MVR)', align: 'right', render: (row) => formatCompactCurrency(row.discount) },
+  { key: 'discount', header: 'Discount (MVR)', align: 'right', render: (row) => row.discount == null ? 'N/A' : <CompactCurrency value={row.discount} /> },
 ]

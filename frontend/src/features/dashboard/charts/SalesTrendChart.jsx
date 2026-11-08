@@ -1,6 +1,6 @@
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { axisStyle, chartColors, gridStroke } from '../utils/chartConfig'
-import { formatCompactCurrency } from '../utils/formatCurrency'
+import { formatCompactCurrency, formatCurrency } from '../utils/formatCurrency'
 
 export default function SalesTrendChart({ data = [], valueKey = 'sales', label = 'Sales (MVR)', color = chartColors.primary }) {
   return (
@@ -15,7 +15,7 @@ export default function SalesTrendChart({ data = [], valueKey = 'sales', label =
         <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} vertical={false} />
         <XAxis dataKey="date" tick={axisStyle} tickLine={false} axisLine={false} minTickGap={16} />
         <YAxis tick={axisStyle} tickLine={false} axisLine={false} tickFormatter={formatCompactCurrency} />
-        <Tooltip formatter={(value) => formatCompactCurrency(value)} contentStyle={tooltipStyle} />
+        <Tooltip formatter={(value) => formatCurrency(value)} contentStyle={tooltipStyle} />
         <Area type="monotone" dataKey={valueKey} name={label} stroke={color} strokeWidth={2.5} fill={`url(#area-${valueKey})`} dot={false} />
       </AreaChart>
     </ResponsiveContainer>

@@ -1,6 +1,6 @@
 import { Fragment } from 'react'
 import { seriesPalette } from '../utils/chartConfig'
-import { formatCompactCurrency } from '../utils/formatCurrency'
+import { formatCurrency } from '../utils/formatCurrency'
 
 const hours = Array.from({ length: 14 }, (_, index) => `${index + 8}:00`)
 const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
@@ -25,7 +25,7 @@ export default function HeatmapChart({ data = [] }) {
               return (
                 <div
                   key={`${day}-${hour}`}
-                  title={`${day} ${hour}: ${formatCompactCurrency(value)}`}
+                  title={`${day} ${hour}: MVR ${formatCurrency(value)}`}
                   style={{
                     height: 26,
                     borderRadius: 4,

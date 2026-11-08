@@ -1,27 +1,39 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useAppStore } from '@/store'
 import { getDashboardFilters } from '../api/dashboardApi'
 import { dashboardKeys } from '../api/queryKeys'
 
-const isoDate = (date) => date.toISOString().slice(0, 10)
+const isoDate = (date) => {
+  return date.toISOString().slice(0, 10)
+}
 
-const today = () => isoDate(new Date())
+const businessTodayDate = () => {
+  const parts = new Intl.DateTimeFormat('en-MV', {
+    timeZone: 'Indian/Maldives',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date())
+  const part = (type) => Number(parts.find((value) => value.type === type)?.value)
+  return new Date(Date.UTC(part('year'), part('month') - 1, part('day')))
+}
+
 const monthStart = () => {
-  const now = new Date()
-  return isoDate(new Date(now.getFullYear(), now.getMonth(), 1))
+  const now = businessTodayDate()
+  return isoDate(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)))
 }
 
 const startOfWeek = (now) => {
-  const day = now.getDay()
+  const day = now.getUTCDay()
   const monday = new Date(now)
-  monday.setDate(now.getDate() - ((day + 6) % 7))
+  monday.setUTCDate(now.getUTCDate() - ((day + 6) % 7))
   return monday
 }
 
 const endOfWeek = (start) => {
   const sunday = new Date(start)
-  sunday.setDate(start.getDate() + 6)
+  sunday.setUTCDate(start.getUTCDate() + 6)
   return sunday
 }
 
@@ -36,15 +48,15 @@ const rangeOptions = [
 ]
 
 const getPresetRange = (range) => {
-  const now = new Date()
-  const todayString = today()
+  const now = businessTodayDate()
+  const todayString = isoDate(now)
 
   switch (range) {
     case 'today':
       return { from: todayString, to: todayString }
     case 'last_3_days': {
       const start = new Date(now)
-      start.setDate(now.getDate() - 2)
+      start.setUTCDate(now.getUTCDate() - 2)
       return { from: isoDate(start), to: todayString }
     }
     case 'this_week': {
@@ -61,12 +73,16 @@ const getPresetRange = (range) => {
     case 'this_month':
       return { from: monthStart(), to: todayString }
     case 'previous_month': {
-      const previousMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0)
-      const previousMonthStart = new Date(previousMonthEnd.getFullYear(), previousMonthEnd.getMonth(), 1)
+      const previousMonthEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 0))
+      const previousMonthStart = new Date(Date.UTC(
+        previousMonthEnd.getUTCFullYear(),
+        previousMonthEnd.getUTCMonth(),
+        1,
+      ))
       return { from: isoDate(previousMonthStart), to: isoDate(previousMonthEnd) }
     }
     case 'last_3_months': {
-      const start = new Date(now.getFullYear(), now.getMonth() - 2, 1)
+      const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 2, 1))
       return { from: isoDate(start), to: todayString }
     }
     default:
@@ -83,16 +99,30 @@ const defaultFilters = {
 }
 
 export function useDashboardFilters() {
-  const activeBranch = useAppStore((s) => s.activeBranch)
+  const activeBranchId = useAppStore((s) => s.activeBranch?.id)
   const branches = useAppStore((s) => s.branches)
   const [filters, setFilters] = useState(defaultFilters)
+  const knownStaffOptions = useRef(new Map())
+
+  const staffFilterParams = useMemo(() => ({
+    branch_id: filters.branch_id || activeBranchId || '',
+    from: filters.from,
+    to: filters.to,
+    category_id: filters.category_id,
+  }), [activeBranchId, filters.branch_id, filters.category_id, filters.from, filters.to])
 
   const optionsQuery = useQuery({
-    queryKey: dashboardKeys.filters(),
-    queryFn: getDashboardFilters,
+    queryKey: dashboardKeys.filters(staffFilterParams),
+    queryFn: () => getDashboardFilters(staffFilterParams),
     staleTime: 10 * 60 * 1000,
     gcTime: 30 * 60 * 1000,
   })
+
+  useEffect(() => {
+    for (const option of optionsQuery.data?.staff || []) {
+      knownStaffOptions.current.set(option.id, option)
+    }
+  }, [optionsQuery.data])
 
   const setFilter = (key, value) => {
     if (key === 'range') {
@@ -112,12 +142,19 @@ export function useDashboardFilters() {
 
   const filterOptions = useMemo(() => {
     const apiOptions = optionsQuery.data || {}
+    const staffOptions = apiOptions.staff || []
+    const selectedStaffOption = filters.staff_id
+      ? knownStaffOptions.current.get(filters.staff_id)
+      : null
+    const hasSelectedStaffOption = staffOptions.some((option) => option.id === filters.staff_id)
     return {
       branches: apiOptions.branches?.length ? apiOptions.branches : branches,
-      staff: apiOptions.staff || [],
+      staff: selectedStaffOption && !hasSelectedStaffOption
+        ? [...staffOptions, selectedStaffOption]
+        : staffOptions,
       categories: apiOptions.categories || [],
     }
-  }, [branches, optionsQuery.data])
+  }, [branches, filters.staff_id, optionsQuery.data])
 
   return {
     filters,

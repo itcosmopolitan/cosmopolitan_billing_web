@@ -1,6 +1,6 @@
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { axisStyle, chartColors, gridStroke } from '../utils/chartConfig'
-import { formatCompactCurrency } from '../utils/formatCurrency'
+import { formatCompactCurrency, formatCurrency } from '../utils/formatCurrency'
 
 export default function BranchComparisonChart({ data = [], valueKey = 'sales' }) {
   return (
@@ -9,7 +9,7 @@ export default function BranchComparisonChart({ data = [], valueKey = 'sales' })
         <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} horizontal={false} />
         <XAxis type="number" tick={axisStyle} tickFormatter={formatCompactCurrency} axisLine={false} tickLine={false} />
         <YAxis type="category" dataKey="branch" tick={axisStyle} axisLine={false} tickLine={false} width={86} />
-        <Tooltip cursor={{ fill: 'transparent' }} formatter={(value) => formatCompactCurrency(value)} contentStyle={tooltipStyle} />
+        <Tooltip cursor={{ fill: 'transparent' }} formatter={(value) => formatCurrency(value)} contentStyle={tooltipStyle} />
         <Bar dataKey={valueKey} fill={chartColors.emerald} radius={[0, 4, 4, 0]} cursor={{ fill: 'transparent' }} />
       </BarChart>
     </ResponsiveContainer>

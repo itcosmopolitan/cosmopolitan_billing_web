@@ -18,6 +18,7 @@ import { runExportJob } from '@/utils/exportJob'
 import { getAmountDecimals } from '@/utils/decimalPrecision'
 import { searchReportRows } from './reportSearch'
 import { sumCurrencyValues } from './reportTotals'
+import { salesRegisterColumnLabel } from './salesRegisterLabels'
 import { NOT_SET, NOT_APPLICABLE } from '@/utils/emptyValue'
 import { businessDateToday } from '@/utils/businessDate'
 
@@ -1301,9 +1302,13 @@ function ReportDetailPage({ report, reportMap, onBack }) {
   }, [columnPrefs.ready, columnPrefs.prefs, columnByKey, reportColumns])
 
   const headerColumns = useMemo(() => visibleColumns.map((col) => {
+    if (report.id === 'sales-register') {
+      const inclusiveLabel = salesRegisterColumnLabel(col)
+      if (inclusiveLabel) return { ...col, label: inclusiveLabel }
+    }
     if (gstMode !== 'exclusive' || !GST_EXCL_SALES_LABEL_KEYS.has(col.key)) return col
     return { ...col, label: GST_EXCL_SALES_LABELS[col.key] || col.label }
-  }), [gstMode, visibleColumns])
+  }), [gstMode, report.id, visibleColumns])
 
   const tableColSpan = visibleColumns.length + (columnPrefs.ready ? 1 : 0)
 

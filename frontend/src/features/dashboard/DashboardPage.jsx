@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
-import { useIsFetching, useQueryClient } from '@tanstack/react-query'
+import { useIsFetching } from '@tanstack/react-query'
 import DashboardHeader from './components/DashboardHeader'
 import DashboardTabs from './components/DashboardTabs'
 import SkeletonCard from './components/SkeletonCard'
@@ -24,9 +24,10 @@ const tabComponents = {
 }
 
 export default function DashboardPage() {
-  const queryClient = useQueryClient()
   const can = useCan()
   const [activeTab, setActiveTab] = useState('sales')
+  const [refreshToken, setRefreshToken] = useState(0)
+  const [updatedAt, setUpdatedAt] = useState(null)
   const { autoRefresh, toggleAutoRefresh } = useAutoRefresh(false)
   const { filters, setFilter, resetFilters, filterOptions, rangeOptions } = useDashboardFilters()
   const debouncedFilters = useDebouncedFilters(filters, 400)
@@ -44,9 +45,7 @@ export default function DashboardPage() {
   }, [activeTab, visibleTabs])
 
   const ActiveTab = tabComponents[activeTab] || SalesDashboard
-  const refresh = () => {
-    queryClient.invalidateQueries({ queryKey: dashboardKeys.root })
-  }
+  const refresh = () => setRefreshToken((token) => token + 1)
 
   const handleExport = (format) => {
     exportDashboard({ tab: activeTab, format, filters: debouncedFilters }).catch(() => {})
@@ -73,13 +72,19 @@ export default function DashboardPage() {
         onReset={resetFilters}
         onRefresh={refresh}
         isFetching={fetchingCount > 0}
+        updatedAt={updatedAt}
         autoRefresh={autoRefresh}
         onToggleAutoRefresh={toggleAutoRefresh}
         onExport={handleExport}
       />
       <DashboardTabs tabs={visibleTabs} activeTab={activeTab} onChange={setActiveTab} />
       <Suspense fallback={<DashboardFallback />}>
-        <ActiveTab filters={debouncedFilters} autoRefresh={autoRefresh} />
+        <ActiveTab
+          filters={debouncedFilters}
+          autoRefresh={autoRefresh}
+          refreshToken={refreshToken}
+          onUpdatedAt={setUpdatedAt}
+        />
       </Suspense>
     </div>
   )

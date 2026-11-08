@@ -10,8 +10,21 @@ const toneColor = {
   neutral: 'var(--accent)',
 }
 
-function KpiCard({ title, value, delta, tone = 'neutral', sparkline = [], loading = false, permission }) {
+function KpiCard({
+  title,
+  value,
+  detail,
+  tooltip,
+  delta,
+  deltaTooltip,
+  deltaUnit = '%',
+  tone = 'neutral',
+  sparkline = [],
+  loading = false,
+  permission,
+}) {
   const color = toneColor[tone] || toneColor.neutral
+  const isExtremePercentDelta = deltaUnit === '%' && Number(delta) > 999
   const card = (
     <div className="card" style={{ minHeight: 136 }}>
       <div className="card-body" style={{ padding: 16 }}>
@@ -23,13 +36,21 @@ function KpiCard({ title, value, delta, tone = 'neutral', sparkline = [], loadin
           </div>
         ) : (
           <>
-            <div style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>{title}</div>
+            <div title={tooltip} style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>{title}</div>
             <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12, marginTop: 8 }}>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontSize: 24, lineHeight: 1, fontWeight: 700, color: 'var(--text-primary)' }}>{value}</div>
-                {delta !== undefined && delta !== null && (
-                  <div style={{ marginTop: 8, fontSize: 12, color: Number(delta) >= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 600 }}>
-                    {Number(delta) >= 0 ? '+' : ''}{Number(delta).toFixed(1)}% vs previous
+                {detail ? (
+                  <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-muted)' }}>{detail}</div>
+                ) : null}
+                {delta !== undefined && (
+                  <div
+                    title={isExtremePercentDelta ? deltaTooltip : undefined}
+                    style={{ marginTop: 8, fontSize: 12, color: delta === null ? 'var(--text-muted)' : Number(delta) >= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 600 }}
+                  >
+                    {delta === null
+                      ? 'N/A vs previous'
+                      : `${isExtremePercentDelta ? '>' : Number(delta) >= 0 ? '+' : ''}${isExtremePercentDelta ? 999 : Number(delta).toFixed(1)}${deltaUnit} vs previous`}
                   </div>
                 )}
               </div>

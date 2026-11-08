@@ -1,6 +1,6 @@
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts'
 import { seriesPalette } from '../utils/chartConfig'
-import { formatCompactCurrency } from '../utils/formatCurrency'
+import { formatCompactCurrency, formatCurrency } from '../utils/formatCurrency'
 
 export default function CategoryPieChart({
   data = [],
@@ -58,7 +58,12 @@ export default function CategoryPieChart({
                 <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12, color: 'var(--text-secondary)' }}>
                   {entry[nameKey]}
                 </span>
-                <span className="currency">{valueFormatter(value)}</span>
+                <span
+                  className="currency"
+                  title={valueFormatter === formatCompactCurrency ? `MVR ${formatCurrency(value)}` : undefined}
+                >
+                  {valueFormatter(value)}
+                </span>
               </div>
               {showPercent && (
                 <div className="progress-bar" style={{ height: 4, marginLeft: 16 }}>
@@ -86,7 +91,7 @@ function CustomTooltip({ active, payload, valueFormatter = (v) => v, nameKey = '
   return (
     <div style={{ padding: 10, background: 'var(--bg-surface)', border: '1px solid var(--border-default)', borderRadius: 8, color: 'var(--text-primary)', minWidth: 140 }}>
       <div style={{ fontWeight: 700, marginBottom: items && items.length ? 8 : 0 }}>
-        {name} : {valueFormatter ? valueFormatter(value) : value}
+        {name} : {valueFormatter === formatCompactCurrency ? `MVR ${formatCurrency(value)}` : valueFormatter(value)}
       </div>
       {items && items.length ? (
         <div style={{ maxHeight: 160, overflowY: 'auto', fontSize: 13 }}>

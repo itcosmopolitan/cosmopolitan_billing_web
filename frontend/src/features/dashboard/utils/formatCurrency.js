@@ -10,10 +10,10 @@ export const formatCompactCurrency = (value) => {
   const n = Number(value || 0)
   const sign = n < 0 ? '-' : ''
   const abs = Math.abs(n)
-    if (abs >= 1000000000) return `${sign}${(abs / 1000000000).toFixed(1)}B`
-    if (abs >= 1000000) return `${sign}${(abs / 1000000).toFixed(1)}M`
-    if (abs >= 1000) return `${sign}${(abs / 1000).toFixed(1)}K`
-    return `${sign}${formatAmountNumber(abs)}`
+  if (abs >= 1000000000) return `${sign}${(abs / 1000000000).toFixed(1)}B`
+  if (abs >= 1000000) return `${sign}${(abs / 1000000).toFixed(1)}M`
+  if (abs >= 1000) return `${sign}${(abs / 1000).toFixed(1)}K`
+  return `${sign}${formatAmountNumber(abs)}`
 }
 
 export const formatNumber = (value) => Number(value || 0).toLocaleString('en-MV')

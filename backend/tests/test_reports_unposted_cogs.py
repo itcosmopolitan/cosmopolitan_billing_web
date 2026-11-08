@@ -77,7 +77,7 @@ async def _seed(db: AsyncSession) -> User:
     return actor
 
 
-def test_unposted_invoices_are_excluded_from_report_and_dashboard_cogs_by_default():
+def test_dashboard_profit_uses_finalized_statuses_when_unposted_cogs_are_requested():
     async def scenario():
         db = await _build_session()
         try:
@@ -141,5 +141,5 @@ def test_unposted_invoices_are_excluded_from_report_and_dashboard_cogs_by_defaul
     assert legacy_product["items"][0]["cost_value"] == 30
     assert default_category["items"][0]["cost_value"] == 10
     assert default_customer["items"][0]["cost_of_sales"] == 10
-    assert default_dashboard["profit"] == 50
-    assert legacy_dashboard["profit"] == 30
+    assert default_dashboard["profit"] == 10
+    assert legacy_dashboard["profit"] == 10

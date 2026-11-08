@@ -69,6 +69,7 @@ class Settings(BaseSettings):
     )
     # ─── Dashboard Read Models ────────────────────────────────────────────
     dashboard_use_materialized_views: bool = False
+    dashboard_business_timezone: str = "Indian/Maldives"
 
     # ─── Notifications ──────────────────────────────────────────────────────
     notification_expiry_within_days: int = 30
