@@ -356,7 +356,7 @@
     const paymentMode = String(sale.paymentMode || sale.payment_mode || sale.method || '').toLowerCase()
     const paymentDetails = isPurchaseDocument ? '' : paymentMode === 'cash'
       ? `<strong>Cash Collected:</strong> ${formatNumber(sale.cashCollected || 0)}<br/><strong>Cash Refunded:</strong> ${formatNumber(sale.cashChange || sale.cash_change || 0)}`
-      : ['card', 'upi', 'bank_transfer'].includes(paymentMode) && (sale.paymentRef || sale.payment_ref)
+      : ['card', 'upi', 'cheque', 'bank_transfer'].includes(paymentMode) && (sale.paymentRef || sale.payment_ref)
         ? `<strong>Payment Ref:</strong> ${escapeHtml(sale.paymentRef || sale.payment_ref)}`
         : ''
 

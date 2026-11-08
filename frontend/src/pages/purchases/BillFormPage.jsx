@@ -149,6 +149,10 @@ export default function BillFormPage({ mode = 'bill' }) {
       toast.error('Pick a payment method (or uncheck Payment paid?)')
       return
     }
+    if (!isGrn && form.paymentReceived && form.paymentMethod === 'cheque' && !String(form.paymentRef || '').trim()) {
+      toast.error('Enter the cheque number')
+      return
+    }
     setSaving(true)
     try {
       const persistItems = form.items.map((i) => ({ ...i, ...roundPurchaseLineForApi(i) }))
@@ -204,6 +208,7 @@ export default function BillFormPage({ mode = 'bill' }) {
             lineGross: purchaseLineGross,
           }),
           payment_mode: form.paymentReceived ? form.paymentMethod : null,
+          payment_ref: form.paymentReceived ? (form.paymentRef || '').trim() || null : null,
           notes: form.notes || null,
         }
         const billNum = form.number?.trim()

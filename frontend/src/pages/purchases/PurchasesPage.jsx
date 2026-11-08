@@ -81,7 +81,7 @@ const RETURN_STATUS_FILTER_OPTIONS = statusOptions(['draft', 'approved', 'void']
 // Mirror of routes/purchases.py PaymentMode + sales VALID_PAYMENT_MODES.
 // Used to render the Mode column gracefully when a legacy bill has a
 // non-allow-list value (renders as em-dash instead of fabricating CASH).
-const VALID_PAYMENT_MODES = new Set(['cash', 'card', 'upi', 'bank_transfer'])
+const VALID_PAYMENT_MODES = new Set(['cash', 'card', 'upi', 'cheque', 'bank_transfer', 'credit'])
 function displayPaymentMode(raw) {
   if (!raw) return NOT_SET
   const v = String(raw).trim().toLowerCase()
@@ -2023,7 +2023,7 @@ export default function PurchasesPage() {
                   style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }} />
               </FormGroup>
               <FormGroup label="Payment Method" required>
-                {/* Same 4 methods as POS — see purchases.py PaymentMode Literal. */}
+                {/* Current payment methods; UPI remains available in historical records. */}
                 <AutocompleteDropdown
                   value={payMode}
                   onChange={setPayMode}

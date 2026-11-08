@@ -83,6 +83,7 @@ export const emptyBillForm = (branchId) => ({
   discountType: '%',
   paymentReceived: false,
   paymentMethod: null,
+  paymentRef: '',
   notes: '',
 })
 

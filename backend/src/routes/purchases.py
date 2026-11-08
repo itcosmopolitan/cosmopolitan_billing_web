@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -94,12 +94,15 @@ async def _list_purchase_items_at_branch(db: AsyncSession, branch_id: str, items
         await ensure_item_listed_at_branch(db, item_id=item_id, branch_id=branch_id)
 
 # ─── Schemas ─────────────────────────────────────────────────────────────────
-# 2026-05-24: same allow-list as routes/sales.py PaymentMode. Single source
-# of truth across the app — POS, Record Payment on invoices, AND Record
-# Payment on purchase bills all offer the same 4 methods. Mirror the SO
-# `RecordedPaymentMode` decision: cheque NOT included even though vendor
-# settlements often use it, because parity with the POS dropdown won out.
-PaymentMode = Literal["cash", "card", "upi", "bank_transfer", "credit"]
+PaymentMode = Literal["cash", "card", "cheque", "bank_transfer", "credit"]
+HistoricalPaymentMode = Literal["cash", "card", "upi", "cheque", "bank_transfer", "credit"]
+
+
+def _validate_new_payment_mode(mode: Optional[str], reference: Optional[str]) -> None:
+    if mode == "upi":
+        raise ValueError("UPI is no longer accepted for new payments")
+    if mode == "cheque" and not (reference or "").strip():
+        raise ValueError("A cheque number is required for cheque payments")
 
 
 async def _write_post_commit_audit(
@@ -596,7 +599,15 @@ class PurchaseCreate(BaseModel):
     @field_validator("payment_mode", mode="before")
     @classmethod
     def _coerce_payment_mode(cls, v):
-        return _coerce_payment_mode_value(v)
+        mode = _coerce_payment_mode_value(v)
+        if mode == "upi":
+            raise ValueError("UPI is no longer accepted for new payments")
+        return mode
+
+    @model_validator(mode="after")
+    def _validate_cheque_reference(self):
+        _validate_new_payment_mode(self.payment_mode, self.payment_ref)
+        return self
 
 
 class BillLineUpdate(BaseModel):
@@ -626,8 +637,8 @@ class BillUpdate(BaseModel):
 class PaymentIn(BaseModel):
     amount: float
     # 2026-05-24: tightened from `str = "neft"` to a required Literal,
-    # matching sales/PaymentIn.mode. Allow-list = same 4 as POS. Legacy
-    # callers that send `"neft"` get coerced to None by the validator
+    # matching sales/PaymentIn.mode. Legacy callers that send `"neft"` get
+    # coerced to None by the validator
     # below — and since mode is required, the resulting None fails the
     # Literal with a 422 telling them the valid set. Force the migration.
     mode: PaymentMode
@@ -636,7 +647,15 @@ class PaymentIn(BaseModel):
     @field_validator("mode", mode="before")
     @classmethod
     def _coerce_mode(cls, v):
-        return _coerce_payment_mode_value(v)
+        mode = _coerce_payment_mode_value(v)
+        if mode == "upi":
+            raise ValueError("UPI is no longer accepted for new payments")
+        return mode
+
+    @model_validator(mode="after")
+    def _validate_cheque_reference(self):
+        _validate_new_payment_mode(self.mode, self.ref)
+        return self
 
 
 def _purchase_bill_filters(
@@ -1944,7 +1963,7 @@ class PaymentAllocationIn(BaseModel):
 class VendorPaymentCreate(BaseModel):
     vendor_id: str
     date: Optional[str] = None
-    payment_mode: PaymentMode
+    payment_mode: HistoricalPaymentMode
     payment_ref: Optional[str] = None
     notes: Optional[str] = None
     allocations: List[PaymentAllocationIn] = Field(..., min_length=1)
@@ -1956,6 +1975,12 @@ class VendorPaymentCreate(BaseModel):
     @classmethod
     def _coerce_payment_mode(cls, v):
         return _coerce_payment_mode_value(v)
+
+    @model_validator(mode="after")
+    def _validate_cheque_reference(self):
+        if self.payment_mode == "cheque" and not (self.payment_ref or "").strip():
+            raise ValueError("A cheque number is required for cheque payments")
+        return self
 
 
 def _vendor_payment_branch(
@@ -2116,6 +2141,8 @@ async def update_payment(
         raise HTTPException(400, "Cannot edit a voided payment")
     if data.vendor_id != pay.vendor_id:
         raise HTTPException(400, "Cannot change the vendor on a payment — void and recreate instead")
+    if data.payment_mode == "upi" and str(pay.payment_mode or "").strip().lower() != "upi":
+        raise HTTPException(400, "UPI is no longer accepted for new payments")
 
     old_mode = pay.payment_mode
     await reverse_vendor_payment(db, pay)
@@ -2404,6 +2431,9 @@ async def create_payment(
     credit_applied and bumps vendor.credit_balance. Credit mode debits
     vendor advance instead of cash.
     """
+    if data.payment_mode == "upi":
+        raise HTTPException(400, "UPI is no longer accepted for new payments")
+
     vendor = (await db.execute(
         select(Vendor).where(Vendor.id == data.vendor_id)
     )).scalar_one_or_none()
@@ -3474,7 +3504,15 @@ class ConvertPOToBillIn(BaseModel):
     @field_validator("payment_mode", mode="before")
     @classmethod
     def _coerce_payment_mode(cls, v):
-        return _coerce_payment_mode_value(v)
+        mode = _coerce_payment_mode_value(v)
+        if mode == "upi":
+            raise ValueError("UPI is no longer accepted for new payments")
+        return mode
+
+    @model_validator(mode="after")
+    def _validate_cheque_reference(self):
+        _validate_new_payment_mode(self.payment_mode, self.payment_ref)
+        return self
 
 
 
@@ -4803,7 +4841,15 @@ class BillFromGRNIn(BaseModel):
     @field_validator("payment_mode", mode="before")
     @classmethod
     def _coerce_payment_mode(cls, v):
-        return _coerce_payment_mode_value(v)
+        mode = _coerce_payment_mode_value(v)
+        if mode == "upi":
+            raise ValueError("UPI is no longer accepted for new payments")
+        return mode
+
+    @model_validator(mode="after")
+    def _validate_cheque_reference(self):
+        _validate_new_payment_mode(self.payment_mode, self.payment_ref)
+        return self
 
 
 @router.get("/grns/", dependencies=[Depends(require_perm(*GRN_DOCUMENT_READ))])

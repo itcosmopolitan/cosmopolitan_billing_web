@@ -268,15 +268,29 @@ export default function BillFormModal({
                   <span>Payment paid?</span>
                 </label>
                 {billForm.paymentReceived && (
-                  <AutocompleteDropdown
-                    value={billForm.paymentMethod || ''}
-                    onChange={(v) => pbf('paymentMethod', v || null)}
-                    options={PAYMENT_METHOD_OPTIONS}
-                    prependOptions={[{ id: '', label: 'Select method…', disabled: true }]}
-                    isSearchFieldRequired={false}
-                    placeholder="Select method…"
-                    style={{ fontSize: 13 }}
-                  />
+                  <>
+                    <AutocompleteDropdown
+                      value={billForm.paymentMethod || ''}
+                      onChange={(v) => {
+                        if (v !== billForm.paymentMethod) pbf('paymentRef', '')
+                        pbf('paymentMethod', v || null)
+                      }}
+                      options={PAYMENT_METHOD_OPTIONS}
+                      prependOptions={[{ id: '', label: 'Select method…', disabled: true }]}
+                      isSearchFieldRequired={false}
+                      placeholder="Select method…"
+                      style={{ fontSize: 13 }}
+                    />
+                    {billForm.paymentMethod === 'cheque' && (
+                      <input
+                        className="form-input"
+                        value={billForm.paymentRef || ''}
+                        onChange={(e) => pbf('paymentRef', e.target.value)}
+                        placeholder="Cheque number"
+                        aria-label="Cheque number"
+                      />
+                    )}
+                  </>
                 )}
               </div>
             </FormGroup>

@@ -229,6 +229,7 @@ export default function VendorPaymentFormPage() {
     if (!vendor?.id) { toast.error('Pick a vendor first'); return }
     if (totals.count === 0) { toast.error('Select at least one bill'); return }
     if (!paymentMode) { toast.error('Pick a payment method'); return }
+    if (paymentMode === 'cheque' && !paymentRef.trim()) { toast.error('Enter the cheque number'); return }
     if (creditMode && creditInsufficient) {
       toast.error(`Insufficient vendor credit (MVR) — ${fmt(avail)} available, ${fmt(totals.allocated)} needed`)
       return
@@ -480,20 +481,25 @@ export default function VendorPaymentFormPage() {
               <FormGroup label="Method" required>
                 <AutocompleteDropdown
                   value={paymentMode}
-                  onChange={setPaymentMode}
+                  onChange={(value) => {
+                    if (value !== paymentMode) setPaymentRef('')
+                    setPaymentMode(value)
+                  }}
                   onSelectOption={(opt) => {
                     if (opt?.id === 'credit') seedApplyToBalances()
                   }}
-                  options={PAYMENT_METHOD_WITH_CREDIT_OPTIONS}
+                  options={isEdit && paymentMode === 'upi'
+                    ? [...PAYMENT_METHOD_WITH_CREDIT_OPTIONS, { id: 'upi', label: 'UPI (Legacy)' }]
+                    : PAYMENT_METHOD_WITH_CREDIT_OPTIONS}
                   isSearchFieldRequired={false}
                 />
               </FormGroup>
-              <FormGroup label="Reference">
+              <FormGroup label={paymentMode === 'cheque' ? 'Cheque number' : 'Reference'} required={paymentMode === 'cheque'}>
                 <input
                   className="form-input"
                   value={paymentRef}
                   onChange={(e) => setPaymentRef(e.target.value)}
-                  placeholder="UTR / NEFT / cheque #"
+                  placeholder={paymentMode === 'cheque' ? 'Cheque number' : 'UTR / NEFT / transaction id'}
                   disabled={creditMode}
                 />
               </FormGroup>

@@ -815,7 +815,7 @@ async def add_payment_atomic(
     2026-05-24: added `mode` parameter. Previously, paying a pending
     invoice (created with `payment_mode=None`) left the mode column null
     forever — the Sales > Invoices "Mode" cell would render as em-dash
-    even after the operator picked cash/upi/etc. via Record Payment.
+    even after the operator picked a tender via Record Payment.
     """
     if amount <= 0:
         return None

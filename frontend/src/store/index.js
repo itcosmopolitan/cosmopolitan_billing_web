@@ -280,7 +280,7 @@ export const usePOSStore = create(persist((set, get) => ({
   discountType: 'pct',
   discountReason: '',
   // Sales Phase 1 (2026-05-23): payment is now two fields — a checkbox
-  // ("Payment received?") + a method dropdown (Cash / Card / UPI /
+  // ("Payment received?") + a method dropdown (Cash / Card / Cheque /
   // Bank Transfer). Default unchecked so the operator must consciously
   // confirm receipt before the sale is recorded as paid. When unchecked,
   // POSPage submits with payment_mode=null → backend creates an unpaid
@@ -593,7 +593,7 @@ export const usePOSStore = create(persist((set, get) => ({
     if ('paymentReceived' in bill) {
       // New-shape held bill — restore as-is.
       resumedReceived = !!bill.paymentReceived
-      resumedMethod = bill.paymentMethod ?? null
+      resumedMethod = bill.paymentMethod === 'upi' ? null : (bill.paymentMethod ?? null)
     } else if (bill.paymentMethod && bill.paymentMethod !== 'credit') {
       resumedReceived = true
       resumedMethod = bill.paymentMethod
@@ -610,7 +610,7 @@ export const usePOSStore = create(persist((set, get) => ({
       notes: bill.notes || '',
       paymentReceived: resumedReceived,
       paymentMethod: resumedMethod,
-      paymentRef: ['card', 'upi', 'bank_transfer'].includes(resumedMethod)
+      paymentRef: ['card', 'upi', 'cheque', 'bank_transfer'].includes(resumedMethod)
         ? (bill.paymentRef || '')
         : '',
       cashCollected: resumedMethod === 'cash' ? (bill.cashCollected || '') : '',

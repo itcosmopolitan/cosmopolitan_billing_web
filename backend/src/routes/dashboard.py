@@ -2214,7 +2214,7 @@ def _payment_mode_expr():
     mode = func.lower(func.trim(func.coalesce(CustomerPayment.payment_mode, "")))
     return case(
         (mode.in_(("bank_transfer", "bank transfer", "transfer")), "bank transfer"),
-        (mode.in_(("cash", "card", "upi", "credit")), mode),
+        (mode.in_(("cash", "card", "upi", "cheque", "credit")), mode),
         else_="other",
     )
 
@@ -2264,10 +2264,14 @@ async def _payment_distribution(
         .group_by(mode_expr)
     )
     amounts = {method: float(amount or 0) for method, amount in rows.fetchall()}
-    return [
+    methods = ("cash", "card", "upi", "cheque", "bank transfer", "credit")
+    distribution = [
         {"method": method.upper(), "amount": amounts.get(method, 0)}
-        for method in ("cash", "card", "upi", "bank transfer", "credit", "other")
+        for method in methods
     ]
+    if amounts.get("other", 0) > 0:
+        distribution.append({"method": "OTHER", "amount": amounts["other"]})
+    return distribution
 
 
 async def _tax_collected(
@@ -2375,6 +2379,7 @@ async def _billing_payload(db: AsyncSession, filters: DashboardFilters, allowed:
             "cash": None if filters.category_id else by_method.get("cash", 0),
             "card": None if filters.category_id else by_method.get("card", 0),
             "upi": None if filters.category_id else by_method.get("upi", 0),
+            "cheque": None if filters.category_id else by_method.get("cheque", 0),
             "transfer": None if filters.category_id else transfer_amount,
             "credit": None if filters.category_id else by_method.get("credit", 0),
             "other": None if filters.category_id else by_method.get("other", 0),
@@ -2397,6 +2402,10 @@ async def _billing_payload(db: AsyncSession, filters: DashboardFilters, allowed:
             "upi": _pct_delta(
                 None if filters.category_id else by_method.get("upi", 0),
                 None if filters.category_id else previous_by_method.get("upi", 0),
+            ),
+            "cheque": _pct_delta(
+                None if filters.category_id else by_method.get("cheque", 0),
+                None if filters.category_id else previous_by_method.get("cheque", 0),
             ),
             "transfer": _pct_delta(
                 None if filters.category_id else transfer_amount,
@@ -2427,6 +2436,10 @@ async def _billing_payload(db: AsyncSession, filters: DashboardFilters, allowed:
             "upi": {
                 "previous": None if filters.category_id else previous_by_method.get("upi", 0),
                 "current": None if filters.category_id else by_method.get("upi", 0),
+            },
+            "cheque": {
+                "previous": None if filters.category_id else previous_by_method.get("cheque", 0),
+                "current": None if filters.category_id else by_method.get("cheque", 0),
             },
             "transfer": {
                 "previous": None if filters.category_id else previous_transfer_amount,

@@ -15,7 +15,7 @@ import { useQuickCustomer } from '@/components/useQuickParty'
 import { useCan } from '@/auth/permissions'
 import { fmt } from '@/utils/helpers'
 import { roundAmount, amountInputStep } from '@/utils/decimalPrecision'
-import { PAYMENT_MODE_LABEL_OPTIONS } from '@/utils/dropdownOptions'
+import { PAYMENT_ENTRY_MODE_OPTIONS } from '@/utils/dropdownOptions'
 import CashTenderFields from '@/components/CashTenderFields'
 import { cashTenderError } from '@/utils/cashTender'
 import { storeCreditApplyAmount, remainingAfterStoreCredit } from '@/utils/storeCredit'
@@ -218,7 +218,12 @@ export default function PaymentFormPage() {
   const creditApplied = storeCreditApplyAmount(avail, totals.allocated, true)
   const remainingTender = remainingAfterStoreCredit(totals.allocated, creditApplied)
 
-  const paymentModeOptions = useMemo(() => PAYMENT_MODE_LABEL_OPTIONS, [])
+  const paymentModeOptions = useMemo(
+    () => isEdit && paymentMode === 'upi'
+      ? [...PAYMENT_ENTRY_MODE_OPTIONS, { id: 'upi', label: 'UPI (Legacy)' }]
+      : PAYMENT_ENTRY_MODE_OPTIONS,
+    [isEdit, paymentMode],
+  )
 
   const seedApplyToBalances = () => {
     const seed = {}
@@ -236,6 +241,10 @@ export default function PaymentFormPage() {
     if (paymentMode === 'cash' && remainingTender > 0.001) {
       const err = cashTenderError(cashCollected, remainingTender)
       if (err) { toast.error(err); return }
+    }
+    if (paymentMode === 'cheque' && remainingTender > 0.001 && !paymentRef.trim()) {
+      toast.error('Enter the cheque number')
+      return
     }
     const allocations = []
     for (const inv of invoices) {
@@ -560,6 +569,7 @@ export default function PaymentFormPage() {
                   value={paymentMode}
                   onChange={(v) => {
                     setPaymentMode(v)
+                    if (v !== paymentMode) setPaymentRef('')
                     if (v !== 'cash') setCashCollected('')
                   }}
                   options={paymentModeOptions}
@@ -567,12 +577,12 @@ export default function PaymentFormPage() {
                   disabled={remainingTender <= 0.001}
                 />
               </FormGroup>
-              <FormGroup label="Reference">
+              <FormGroup label={paymentMode === 'cheque' ? 'Cheque number' : 'Reference'} required={paymentMode === 'cheque'}>
                 <input
                   className="form-input"
                   value={paymentRef}
                   onChange={(e) => setPaymentRef(e.target.value)}
-                  placeholder="UTR / transaction id"
+                  placeholder={paymentMode === 'cheque' ? 'Cheque number' : 'UTR / transaction id'}
                   disabled={remainingTender <= 0.001}
                 />
               </FormGroup>

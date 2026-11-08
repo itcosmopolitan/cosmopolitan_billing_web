@@ -1343,14 +1343,15 @@ async def _run_inventory_and_billing_definitions(monkeypatch) -> None:
             assert billing["kpis"]["upi"] == 20
             assert billing["kpis"]["transfer"] == 30
             assert billing["kpis"]["credit"] == 5
-            assert billing["kpis"]["other"] == 7
+            assert billing["kpis"]["cheque"] == 7
+            assert billing["kpis"]["other"] == 0
             assert {row["method"] for row in billing["charts"]["payment_distribution"]} == {
                 "CASH",
                 "CARD",
                 "UPI",
+                "CHEQUE",
                 "BANK TRANSFER",
                 "CREDIT",
-                "OTHER",
             }
             assert billing["analytics"]["collection_efficiency"] == 65.9
             assert (

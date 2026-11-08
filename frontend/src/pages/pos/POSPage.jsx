@@ -653,7 +653,7 @@ export default function POSPage() {
       return
     }
     if (mustPay && remainingDue > 0.001 && !paymentMethod && !poolCheckout) {
-      toast.error('Pick a payment method (Cash / Card / UPI / Bank Transfer)')
+      toast.error('Pick a payment method (Cash / Card / Cheque / Bank Transfer)')
       return
     }
 
@@ -664,7 +664,12 @@ export default function POSPage() {
       && !paymentMethod
       && !(poolCheckout && !paymentReceived)
     ) {
-      toast.error('Pick a payment method for the remaining amount (Cash / Card / UPI / Bank Transfer)')
+      toast.error('Pick a payment method for the remaining amount (Cash / Card / Cheque / Bank Transfer)')
+      return
+    }
+
+    if (settling && paymentMethod === 'cheque' && remainingDue > 0.001 && !String(paymentRef || '').trim()) {
+      toast.error('Enter the cheque number')
       return
     }
 
@@ -730,7 +735,7 @@ export default function POSPage() {
         }),
         discount: disc,
         payment_mode: settling && remainingDue > 0.001 ? paymentMethod : (settling && creditAppliedNow > 0 && remainingDue <= 0.001 ? null : null),
-        payment_ref: settling && ['card', 'upi', 'bank_transfer'].includes(paymentMethod)
+        payment_ref: settling && ['card', 'upi', 'cheque', 'bank_transfer'].includes(paymentMethod)
           ? paymentRef.trim()
           : null,
         store_credit_amount: creditAppliedNow > 0 ? creditAppliedNow : undefined,
@@ -949,7 +954,7 @@ export default function POSPage() {
   const paymentMethodOptions = [
     { id: 'cash', label: '💵 Cash' },
     { id: 'card', label: '💳 Card' },
-    // { id: 'upi', label: '📱 UPI' },
+    { id: 'cheque', label: '🧾 Cheque' },
     { id: 'bank_transfer', label: '🏦 Bank Transfer' },
     ...(canUseCredit ? [{ id: 'credit', label: '💳 Credit' }] : []),
   ]
@@ -2009,6 +2014,7 @@ export default function POSPage() {
                       onClick={() => {
                         if (isDisabled) return
                         store.setPaymentMethod(isSelected ? null : option.id)
+                        store.setPaymentRef('')
                       }}
                       style={{
                         display: 'inline-flex',
@@ -2048,16 +2054,18 @@ export default function POSPage() {
                     onChange={store.setCashCollected}
                   />
                 )}
-                {['card', 'upi', 'bank_transfer'].includes(paymentMethod) && remainingDuePreview > 0.001 && (
+                {['card', 'upi', 'cheque', 'bank_transfer'].includes(paymentMethod) && remainingDuePreview > 0.001 && (
                   <div style={{ flex: '1 1 180px', minWidth: 160 }}>
-                    <label className="cash-tender__label" htmlFor="pos-payment-ref">Reference number</label>
+                    <label className="cash-tender__label" htmlFor="pos-payment-ref">
+                      {paymentMethod === 'cheque' ? 'Cheque number' : 'Reference number'}
+                    </label>
                     <input
                       id="pos-payment-ref"
                       className="form-input"
                       value={paymentRef}
                       onChange={(e) => store.setPaymentRef(e.target.value)}
-                      placeholder="Payment reference"
-                      aria-label="Payment reference number"
+                      placeholder={paymentMethod === 'cheque' ? 'Cheque number' : 'Payment reference'}
+                      aria-label={paymentMethod === 'cheque' ? 'Cheque number' : 'Payment reference number'}
                       style={{ width: '100%', padding: '6px 8px', fontSize: 12, height: 30, boxSizing: 'border-box' }}
                     />
                   </div>

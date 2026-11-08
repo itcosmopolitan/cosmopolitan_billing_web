@@ -40,6 +40,7 @@ const formatPaymentMode = (value) => {
     cash: 'Cash',
     card: 'Card',
     upi: 'UPI',
+    cheque: 'Cheque',
     bank_transfer: 'Bank Transfer',
     credit: 'Credit',
   }

@@ -198,6 +198,9 @@ export default function InvoiceFormModal({
   )
   const paymentMethodOptions = [
     ...PAYMENT_METHOD_OPTIONS.filter((option) => option.id !== 'upi'),
+    ...(editMode && invoiceForm.paymentMethod === 'upi'
+      ? [{ id: 'upi', label: 'UPI (Legacy)' }]
+      : []),
     ...(canUseCredit ? [{ id: 'credit', label: '💳 Credit' }] : []),
   ]
   const discShares = rollup.discountMode === 'entity'
@@ -335,7 +338,7 @@ export default function InvoiceFormModal({
                       const nextMethod = selected ? null : option.id
                       pif('paymentMethod', nextMethod)
                       pif('paymentReceived', !!nextMethod)
-                      if (!['upi', 'bank_transfer'].includes(nextMethod || '')) {
+                      if (nextMethod !== invoiceForm.paymentMethod) {
                         pif('paymentRef', '')
                       }
                       if (nextMethod !== 'cash') pif('cashCollected', '')
@@ -371,13 +374,17 @@ export default function InvoiceFormModal({
                   />
                 </div>
               )}
-              {['upi', 'bank_transfer'].includes(invoiceForm.paymentMethod || '') && remainingDuePreview > 0.001 && (
+              {['upi', 'cheque', 'bank_transfer'].includes(invoiceForm.paymentMethod || '') && remainingDuePreview > 0.001 && (
                 <div style={{ width: '100%', maxWidth: 300 }}>
+                  {invoiceForm.paymentMethod === 'cheque' && (
+                    <label className="cash-tender__label" htmlFor="invoice-payment-ref">Cheque number</label>
+                  )}
                   <input
+                    id="invoice-payment-ref"
                     className="form-input"
                     value={invoiceForm.paymentRef || ''}
                     onChange={(e) => pif('paymentRef', e.target.value)}
-                    placeholder="Payment reference"
+                    placeholder={invoiceForm.paymentMethod === 'cheque' ? 'Cheque number' : 'Payment reference'}
                     style={{ fontSize: 13, width: '100%' }}
                   />
                 </div>

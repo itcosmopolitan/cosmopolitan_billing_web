@@ -15,7 +15,7 @@ import {
 } from '@/components/ui'
 import * as Icon from '@/components/ui/Icons'
 import {
-  PAYMENT_METHOD_WITH_CREDIT_OPTIONS,
+  PAYMENT_MODE_LABEL_OPTIONS,
   statusOptions as defaultStatusOptions,
 } from '@/utils/dropdownOptions'
 
@@ -91,7 +91,7 @@ function buildChips(filters, fieldSet, {
   if (fieldSet.has('paymentMode') && filters.paymentMode) {
     chips.push({
       key: 'paymentMode',
-      label: `Payment method is ${optionLabel(PAYMENT_METHOD_WITH_CREDIT_OPTIONS, filters.paymentMode)}`,
+      label: `Payment method is ${optionLabel(PAYMENT_MODE_LABEL_OPTIONS, filters.paymentMode)}`,
     })
   }
   if (fieldSet.has('reason') && filters.reason) {
@@ -352,7 +352,7 @@ export default function ListFilters({
               <AutocompleteDropdown
                 value={draft.paymentMode}
                 onChange={(id) => setDraftField('paymentMode', id)}
-                options={PAYMENT_METHOD_WITH_CREDIT_OPTIONS}
+                options={PAYMENT_MODE_LABEL_OPTIONS}
                 prependOptions={[{ id: '', label: 'All Methods' }]}
                 isSearchFieldRequired={false}
                 placeholder="All Methods"

@@ -23,6 +23,7 @@
  *   • mode — 'convert' (default) creates GRN+bill; 'receive' stock only
  */
 import { useEffect, useState } from 'react'
+import toast from 'react-hot-toast'
 import { Modal, FormGroup, AlertBar, AutocompleteDropdown, DatePicker } from '@/components/ui'
 import { PAYMENT_METHOD_OPTIONS } from '@/utils/dropdownOptions'
 import { fmt, fmtQty } from '@/utils/helpers'
@@ -142,6 +143,10 @@ export default function ConvertPOToBillModal({
 
   const handleConfirm = () => {
     if (paymentReceived && !paymentMethod) {
+      return
+    }
+    if (paymentReceived && paymentMethod === 'cheque' && !paymentRef.trim()) {
+      toast.error('Enter the cheque number')
       return
     }
     // Guard: every FEFO line must carry an expiry date (backend requires it).
@@ -346,16 +351,19 @@ export default function ConvertPOToBillModal({
             <FormGroup label="Method" required>
               <AutocompleteDropdown
                 value={paymentMethod || ''}
-                onChange={(v) => setPaymentMethod(v || null)}
+                onChange={(v) => {
+                  if (v !== paymentMethod) setPaymentRef('')
+                  setPaymentMethod(v || null)
+                }}
                 options={PAYMENT_METHOD_OPTIONS}
                 prependOptions={[{ id: '', label: 'Select method…', disabled: true }]}
                 isSearchFieldRequired={false}
                 placeholder="Select method…"
               />
             </FormGroup>
-            <FormGroup label="Reference (optional)">
+            <FormGroup label={paymentMethod === 'cheque' ? 'Cheque number' : 'Reference (optional)'} required={paymentMethod === 'cheque'}>
               <input className="form-input"
-                placeholder="UTR / transaction reference"
+                placeholder={paymentMethod === 'cheque' ? 'Cheque number' : 'UTR / transaction reference'}
                 value={paymentRef}
                 onChange={(e) => setPaymentRef(e.target.value)} />
             </FormGroup>

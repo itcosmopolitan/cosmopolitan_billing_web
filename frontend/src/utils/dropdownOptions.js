@@ -4,7 +4,7 @@ import { formatLabel, statusLabel } from '@/utils/helpers'
 export const PAYMENT_METHOD_OPTIONS = [
   { id: 'cash', label: '💵 Cash' },
   { id: 'card', label: '💳 Card' },
-  { id: 'upi', label: '📱 UPI' },
+  { id: 'cheque', label: '🧾 Cheque' },
   { id: 'bank_transfer', label: `🏦 ${formatLabel('bank_transfer')}` },
 ]
 
@@ -14,11 +14,15 @@ export const PAYMENT_METHOD_WITH_CREDIT_OPTIONS = [
 ]
 
 export const PAYMENT_MODE_LABEL_OPTIONS = [
-  { id: 'cash', label: formatLabel('cash') },
-  { id: 'card', label: formatLabel('card') },
-  { id: 'upi', label: formatLabel('upi') },
-  { id: 'bank_transfer', label: formatLabel('bank_transfer') },
+  ...PAYMENT_METHOD_WITH_CREDIT_OPTIONS.map(({ id }) => ({ id, label: formatLabel(id) })),
+  // Historical payment method: available in filters, never in payment-entry options.
+  { id: 'upi', label: 'UPI (Legacy)' },
 ]
+
+export const PAYMENT_ENTRY_MODE_OPTIONS = PAYMENT_METHOD_OPTIONS.map(({ id }) => ({
+  id,
+  label: formatLabel(id),
+}))
 
 export const CUSTOMER_TYPE_OPTIONS = [
   { id: 'retail', label: 'Retail' },

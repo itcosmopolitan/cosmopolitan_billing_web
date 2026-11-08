@@ -9,7 +9,7 @@ from typing import List, Literal, Optional
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import and_, func, inspect as sa_inspect, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -312,12 +312,9 @@ class LineItemIn(BaseModel):
 
 """Allowed payment methods on a SALE INVOICE.
 
-These are the ONLY values that can sit on `sale_invoices.payment_mode`,
-whether the invoice is created paid via POS (`SaleCreate.payment_mode`)
-or paid later via the record-payment modal (`PaymentIn.mode`). One
-Literal, both endpoints — the POS dropdown and the record-payment
-dropdown must offer the same set (enforced UI-side too in
-SalesPage.jsx#VALID_PAYMENT_MODES and POSPage.jsx).
+PaymentMode is the allow-list for new tenders. HistoricalPaymentMode also
+includes UPI so existing UPI invoices and payments remain readable/editable
+without permitting a new UPI payment.
 
 `None` is also allowed and means "no payment received yet — invoice is
 pending". The `status='pending'` flag already carries that semantic.
@@ -327,8 +324,9 @@ account sale: it is available only to wholesale/staff customers and consumes
 their remaining account limit. The invoice remains pending until a payment is
 recorded later.
 """
-PaymentMode = Literal["cash", "card", "upi", "bank_transfer", "credit"]
-TENDER_PAYMENT_MODES = frozenset({"cash", "card", "upi", "bank_transfer"})
+PaymentMode = Literal["cash", "card", "cheque", "bank_transfer", "credit"]
+HistoricalPaymentMode = Literal["cash", "card", "upi", "cheque", "bank_transfer", "credit"]
+TENDER_PAYMENT_MODES = frozenset({"cash", "card", "cheque", "bank_transfer"})
 PAYMENT_PROOF_CONTENT_TYPES = {"image/png": ".png", "application/pdf": ".pdf"}
 PAYMENT_PROOF_MAX_BYTES = {
     "image/png": 1 * 1024 * 1024,
@@ -371,6 +369,13 @@ def _coerce_payment_mode_value(v):
     if s == "":
         return None
     return s
+
+
+def _validate_new_payment_mode(mode: Optional[str], reference: Optional[str]) -> None:
+    if mode == "upi":
+        raise ValueError("UPI is no longer accepted for new payments")
+    if mode == "cheque" and not (reference or "").strip():
+        raise ValueError("A cheque number is required for cheque payments")
 
 
 async def _validate_unpaid_account_limit(
@@ -715,7 +720,7 @@ class SaleCreate(BaseModel):
     notes: Optional[str] = None
     # Optional store-credit draw (not a payment method). Capped to
     # min(requested, available balance, sale total). Remainder must use
-    # cash/card/upi/bank_transfer when > 0.
+    # a currently supported tender.
     store_credit_amount: Optional[float] = None
     # Phase 4: pos | invoice | sales_order | quotation (default invoice).
     origin: Optional[str] = None
@@ -731,7 +736,15 @@ class SaleCreate(BaseModel):
     @field_validator("payment_mode", mode="before")
     @classmethod
     def _coerce_payment_mode(cls, v):
-        return _coerce_payment_mode_value(v)
+        mode = _coerce_payment_mode_value(v)
+        if mode == "upi":
+            raise ValueError("UPI is no longer accepted for new payments")
+        return mode
+
+    @model_validator(mode="after")
+    def _validate_cheque_reference(self):
+        _validate_new_payment_mode(self.payment_mode, self.payment_ref)
+        return self
 
 
 class InvoiceUpdate(BaseModel):
@@ -749,7 +762,7 @@ class InvoiceUpdate(BaseModel):
     due_date: Optional[str] = None
     items: List[LineItemIn]
     discount: float = 0
-    payment_mode: Optional[PaymentMode] = None
+    payment_mode: Optional[HistoricalPaymentMode] = None
     payment_ref: Optional[str] = None
     notes: Optional[str] = None
     store_credit_amount: Optional[float] = None
@@ -758,6 +771,12 @@ class InvoiceUpdate(BaseModel):
     @classmethod
     def _coerce_payment_mode(cls, v):
         return _coerce_payment_mode_value(v)
+
+    @model_validator(mode="after")
+    def _validate_cheque_reference(self):
+        if self.payment_mode == "cheque" and not (self.payment_ref or "").strip():
+            raise ValueError("A cheque number is required for cheque payments")
+        return self
 
 
 async def _validate_child_counter(
@@ -783,7 +802,7 @@ class SourceOrderLineIn(BaseModel):
 
 class PaymentIn(BaseModel):
     amount: float = 0
-    # Tender method for the cash/card/upi/bank portion. Optional when
+    # Tender method for the cash/card/cheque/bank portion. Optional when
     # store_credit_amount covers the full amount being settled.
     mode: Optional[PaymentMode] = None
     ref: str = ""
@@ -792,7 +811,15 @@ class PaymentIn(BaseModel):
     @field_validator("mode", mode="before")
     @classmethod
     def _coerce_mode(cls, v):
-        return _coerce_payment_mode_value(v)
+        mode = _coerce_payment_mode_value(v)
+        if mode == "upi":
+            raise ValueError("UPI is no longer accepted for new payments")
+        return mode
+
+    @model_validator(mode="after")
+    def _validate_cheque_reference(self):
+        _validate_new_payment_mode(self.mode, self.ref)
+        return self
 
 class QuotationCreate(BaseModel):
     customer_id: Optional[str] = None
@@ -1635,6 +1662,8 @@ async def update_invoice(
     inv = res.unique().scalar_one_or_none()
     if not inv:
         raise HTTPException(404, "Invoice not found")
+    if data.payment_mode == "upi" and str(inv.payment_mode or "").strip().lower() != "upi":
+        raise HTTPException(400, "UPI is no longer accepted for new payments")
     await enforce_branch_access(inv.branch_id, user=user, db=db)
     if inv.pool_drawn:
         raise HTTPException(
@@ -2025,7 +2054,7 @@ async def create_invoice(
             if require_tender or float(data.store_credit_amount or 0) > 0:
                 raise HTTPException(
                     400,
-                    "Select a payment method (Cash / Card / UPI / Bank Transfer) for the remaining amount",
+                    "Select a payment method (Cash / Card / Cheque / Bank Transfer) for the remaining amount",
                 )
             # Unpaid remainder (account sale) — only credit portion settles now.
             settle_tender = 0.0
@@ -2387,8 +2416,8 @@ async def _get_payment_proof_invoice(invoice_id: str, db: AsyncSession, user: Us
     if not inv:
         raise HTTPException(404, "Invoice not found")
     await enforce_branch_access(inv.branch_id, user=user, db=db)
-    if inv.payment_mode not in {"card", "upi", "bank_transfer"}:
-        raise HTTPException(400, "Payment proof is only required for card, UPI, or bank transfer payments")
+    if inv.payment_mode not in {"card", "upi", "cheque", "bank_transfer"}:
+        raise HTTPException(400, "Payment proof is only required for card, cheque, or bank transfer payments")
     return inv
 
 
@@ -2722,7 +2751,7 @@ async def record_payment(
         if mode not in TENDER_PAYMENT_MODES:
             raise HTTPException(
                 400,
-                "Select a payment method (Cash / Card / UPI / Bank Transfer) for the remaining amount",
+                "Select a payment method (Cash / Card / Cheque / Bank Transfer) for the remaining amount",
             )
     elif credit_use <= 0:
         raise HTTPException(400, "amount must be > 0")
@@ -3282,7 +3311,7 @@ class PaymentAllocationIn(BaseModel):
 class CustomerPaymentCreate(BaseModel):
     customer_id: str           # required — picker is strict
     date: Optional[str] = None
-    payment_mode: PaymentMode  # reuse the same Literal as SaleCreate
+    payment_mode: HistoricalPaymentMode
     payment_ref: Optional[str] = None
     notes: Optional[str] = None
     allocations: List[PaymentAllocationIn] = Field(..., min_length=1)
@@ -3294,6 +3323,12 @@ class CustomerPaymentCreate(BaseModel):
     @classmethod
     def _coerce_payment_mode(cls, v):
         return _coerce_payment_mode_value(v)
+
+    @model_validator(mode="after")
+    def _validate_cheque_reference(self):
+        if self.payment_mode == "cheque" and not (self.payment_ref or "").strip():
+            raise ValueError("A cheque number is required for cheque payments")
+        return self
 
 
 def _payment_branch(
@@ -3489,6 +3524,8 @@ async def update_payment(
         raise HTTPException(400, "Cannot edit a voided payment")
     if data.customer_id != pay.customer_id:
         raise HTTPException(400, "Cannot change the customer on a payment — void and recreate instead")
+    if data.payment_mode == "upi" and str(pay.payment_mode or "").strip().lower() != "upi":
+        raise HTTPException(400, "UPI is no longer accepted for new payments")
 
     old_mode = pay.payment_mode
     await reverse_customer_payment(db, pay)
@@ -3785,6 +3822,9 @@ async def create_payment(
 
     Returns: { id, number, total_amount, credit_applied, allocations_count }.
     """
+    if data.payment_mode == "upi":
+        raise HTTPException(400, "UPI is no longer accepted for new payments")
+
     # 1. Customer must exist (UI's CustomerPicker is strict but defence
     #    in depth — direct API hits get rejected too).
     cust = (await db.execute(
@@ -4141,7 +4181,7 @@ async def _write_tender_payment(
     applied_amount: Optional[float] = None,
     credit_settlement: bool = False,
 ) -> CustomerPayment:
-    """Write a cash/card/upi/bank_transfer CustomerPayment (+ cash drawer)."""
+    """Write a tender CustomerPayment (+ cash drawer)."""
     amount = round(float(amount), 2)
     today = datetime.now().strftime("%Y-%m-%d")
     pay = CustomerPayment(
@@ -4246,7 +4286,7 @@ async def _apply_settlement_split(
         elif require_tender_for_remainder:
             raise HTTPException(
                 400,
-                "Select a payment method (Cash / Card / UPI / Bank Transfer) for the remaining amount",
+                "Select a payment method (Cash / Card / Cheque / Bank Transfer) for the remaining amount",
             )
         else:
             tender = 0.0
@@ -5202,10 +5242,25 @@ class ConvertToInvoiceIn(BaseModel):
     this field.
     """
     payment_received: bool = False
-    payment_mode: Optional[str] = None
+    payment_mode: Optional[PaymentMode] = None
+    payment_ref: Optional[str] = None
     notes: Optional[str] = None
     line_allocations: Optional[List[ConvertLineAllocation]] = None
     lines: Optional[List[ConvertLineQtyIn]] = None
+
+    @field_validator("payment_mode", mode="before")
+    @classmethod
+    def _coerce_payment_mode(cls, value):
+        mode = _coerce_payment_mode_value(value)
+        if mode == "upi":
+            raise ValueError("UPI is no longer accepted for new payments")
+        return mode
+
+    @model_validator(mode="after")
+    def _validate_cheque_reference(self):
+        if self.payment_received:
+            _validate_new_payment_mode(self.payment_mode, self.payment_ref)
+        return self
 
 
 class ReturnBatchAlloc(BaseModel):
@@ -6837,6 +6892,7 @@ async def convert_order_to_invoice(
         total=inv_total,
         paid_amount=round(paid, 2),
         payment_mode=payment_mode,
+        payment_ref=(data.payment_ref or "").strip() or None,
         status=status,
         origin="sales_order",
         notes=data.notes or so.notes,
@@ -7033,7 +7089,7 @@ async def convert_order_to_invoice(
             date=today,
             total_amount=round(paid, 2),
             payment_mode=payment_mode,
-            payment_ref="",
+            payment_ref=(data.payment_ref or "").strip(),
             notes="Invoice paid at SO conversion",
             credit_applied=0.0,
             created_by="Staff",
@@ -7285,6 +7341,7 @@ async def convert_quote_to_invoice(
         total=inv_total,
         paid_amount=round(paid, 2),
         payment_mode=payment_mode,
+        payment_ref=(data.payment_ref or "").strip() or None,
         status=status,
         due_date=due_date,
         origin="quotation",
@@ -7428,7 +7485,7 @@ async def convert_quote_to_invoice(
             date=today,
             total_amount=round(paid, 2),
             payment_mode=payment_mode,
-            payment_ref="",
+            payment_ref=(data.payment_ref or "").strip(),
             notes=f"Invoice paid at quote {quote.number} conversion",
             credit_applied=0.0,
             created_by="Staff",

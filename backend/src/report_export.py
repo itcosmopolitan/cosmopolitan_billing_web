@@ -119,7 +119,8 @@ STATUS_LABELS = {
 }
 
 PAYMENT_MODE_LABELS = {
-    "cash": "Cash", "card": "Card", "upi": "UPI", "bank_transfer": "Bank Transfer", "credit": "Credit",
+    "cash": "Cash", "card": "Card", "upi": "UPI", "cheque": "Cheque",
+    "bank_transfer": "Bank Transfer", "credit": "Credit",
 }
 
 TRANSACTION_TYPE_LABELS = {

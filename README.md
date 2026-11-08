@@ -17,7 +17,7 @@ from creating a duplicate import.
 ### 🧾 Point of Sale
 - Touch-friendly product grid with category filter and barcode search
 - Live cart with quantity controls, GST calculation, discounts
-- 4 payment modes: Cash, Card, UPI, Credit
+- Payment modes: Cash, Card, Cheque, Bank Transfer, Credit (historical UPI payments remain available in records)
 - Hold & resume multiple bills simultaneously
 - Keyboard shortcuts: `F2` search · `F4` hold · `F8` complete sale
 - **Thermal receipt printing + WhatsApp share**

@@ -60,6 +60,7 @@ export default function ConvertToInvoiceModal({
   const [paymentReceived, setPaymentReceived] = useState(false)
   const [paymentMethod, setPaymentMethod] = useState(null)
   const [cashCollected, setCashCollected] = useState('')
+  const [paymentRef, setPaymentRef] = useState('')
   const [notes, setNotes] = useState('')
 
   // Per-item batch info populated lazily on modal open. Shape:
@@ -149,6 +150,10 @@ export default function ConvertToInvoiceModal({
     if (paymentReceived && !paymentMethod) {
       return
     }
+    if (paymentReceived && paymentMethod === 'cheque' && !String(paymentRef || '').trim()) {
+      toast.error('Enter the cheque number')
+      return
+    }
     if (paymentReceived && paymentMethod === 'cash') {
       const err = cashTenderError(cashCollected, previewTotal)
       if (err) {
@@ -165,6 +170,7 @@ export default function ConvertToInvoiceModal({
     const body = {
       payment_received: paymentReceived,
       payment_mode: paymentReceived ? paymentMethod : null,
+      payment_ref: paymentReceived && paymentMethod === 'cheque' ? paymentRef.trim() : null,
       notes: notes.trim() || null,
       line_allocations: line_allocations.length ? line_allocations : null,
     }
@@ -407,6 +413,7 @@ export default function ConvertToInvoiceModal({
                 const next = v || null
                 setPaymentMethod(next)
                 if (next !== 'cash') setCashCollected('')
+                if (next !== 'cheque') setPaymentRef('')
               }}
               options={PAYMENT_METHOD_OPTIONS}
               prependOptions={[{ id: '', label: 'Select method…', disabled: true }]}
@@ -420,6 +427,16 @@ export default function ConvertToInvoiceModal({
               value={cashCollected}
               onChange={setCashCollected}
             />
+          )}
+          {paymentMethod === 'cheque' && (
+            <FormGroup label="Cheque number" required>
+              <input
+                className="form-input"
+                value={paymentRef}
+                onChange={(e) => setPaymentRef(e.target.value)}
+                placeholder="Cheque number"
+              />
+            </FormGroup>
           )}
         </div>
       )}

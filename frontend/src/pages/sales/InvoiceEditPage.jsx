@@ -163,8 +163,12 @@ export default function InvoiceEditPage() {
       toast.error('Select a valid child counter for this invoice')
       return
     }
+    if (form.paymentMethod === 'cheque' && !String(form.paymentRef || '').trim()) {
+      toast.error('Enter the cheque number')
+      return
+    }
     if ((form.paymentMethod === 'upi' || form.paymentMethod === 'bank_transfer') && !String(form.paymentRef || '').trim()) {
-      toast.error('Enter the payment reference for UPI or Bank Transfer')
+      toast.error('Enter the payment reference for Bank Transfer')
       return
     }
     const mustPay = customerRequiresImmediatePayment({
@@ -205,7 +209,7 @@ export default function InvoiceEditPage() {
           lineGross: saleLineGross,
         }),
         payment_mode: form.paymentMethod || null,
-        payment_ref: (form.paymentMethod === 'upi' || form.paymentMethod === 'bank_transfer')
+        payment_ref: ['upi', 'cheque', 'bank_transfer'].includes(form.paymentMethod)
           ? (form.paymentRef || '').trim() || null
           : null,
         notes: form.notes || null,

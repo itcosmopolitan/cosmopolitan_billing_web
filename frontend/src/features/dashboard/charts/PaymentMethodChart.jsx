@@ -7,7 +7,14 @@ export default function PaymentMethodChart({ data = [] }) {
     <ResponsiveContainer width="100%" height={240}>
       <BarChart data={data} margin={{ top: 8, right: 10, left: -12, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} vertical={false} />
-        <XAxis dataKey="method" tick={axisStyle} tickLine={false} axisLine={false} />
+        <XAxis
+          dataKey="method"
+          tick={axisStyle}
+          tickLine={false}
+          axisLine={false}
+          interval={0}
+          tickFormatter={(method) => (method === 'BANK TRANSFER' ? 'BANK XFER' : method)}
+        />
         <YAxis tick={axisStyle} tickLine={false} axisLine={false} tickFormatter={formatCompactCurrency} />
         <Tooltip cursor={{ fill: 'transparent' }} formatter={(value) => formatCurrency(value)} contentStyle={tooltipStyle} />
         <Bar dataKey="amount" name="Amount (MVR)" fill={chartColors.primary} radius={[4, 4, 0, 0]} cursor={{ fill: 'transparent' }} />

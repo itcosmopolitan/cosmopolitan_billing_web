@@ -86,7 +86,7 @@ const VALID_TABS = new Set(TABS.map((t) => t.id))
 // "CASH" label for them anymore (the old `|| 'cash'` fallback was a lie —
 // pending invoices have no recorded method yet). Unknown / missing →
 // em-dash so it's obvious nothing was captured.
-const VALID_PAYMENT_MODES = new Set(['cash', 'card', 'upi', 'bank_transfer', 'credit'])
+const VALID_PAYMENT_MODES = new Set(['cash', 'card', 'upi', 'cheque', 'bank_transfer', 'credit'])
 function displayPaymentMode(raw) {
   if (!raw) return NOT_SET
   const v = String(raw).trim().toLowerCase()

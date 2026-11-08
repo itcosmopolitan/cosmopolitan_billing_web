@@ -1026,9 +1026,7 @@ class PurchaseBill(Base):
     # 2026-05-24: parity with SaleInvoice.payment_mode. Captured when the
     # operator records a vendor payment so the Bills tab can show the
     # method. Nullable (None = no payment yet → status='pending'). Allow-
-    # list enforced server-side via the PaymentMode Literal in
-    # routes/purchases.py (same 4 values as the POS side: cash / card /
-    # upi / bank_transfer).
+    # list enforced server-side via PaymentMode in routes/purchases.py.
     payment_mode  = Column(String, nullable=True)
     status        = Column(SAEnum(InvoiceStatus), default=InvoiceStatus.pending)
     credited_amount = Column(Float, default=0, nullable=False)
@@ -1365,7 +1363,7 @@ class SalesReturnLineItem(Base):
 
 # ─── Customer Payment ────────────────────────────────────────────────────────
 # A standalone Payment row recorded when a customer pays one OR MORE invoices
-# in a single transaction (cash handover, single UPI, single bank transfer,
+# in a single transaction (cash handover, single cheque, single bank transfer,
 # etc.). Mirrors how real-world AR is reconciled — the customer doesn't
 # typically write a separate cheque per invoice.
 #

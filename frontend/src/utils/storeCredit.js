@@ -55,6 +55,7 @@ export function formatSettlementLabel({ paymentMode, storeCreditApplied, payment
     cash: 'Cash',
     card: 'Card',
     upi: 'UPI',
+    cheque: 'Cheque',
     bank_transfer: 'Bank Transfer',
     credit: 'Account credit',
     adjustment: 'Outstanding',

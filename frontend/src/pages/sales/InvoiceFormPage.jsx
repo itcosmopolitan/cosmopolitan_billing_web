@@ -261,8 +261,12 @@ export default function InvoiceFormPage() {
       toast.error('This customer is not credit eligible — select a payment method')
       return
     }
+    if (form.paymentMethod === 'cheque' && remaining > 0.001 && !String(form.paymentRef || '').trim()) {
+      toast.error('Enter the cheque number')
+      return
+    }
     if ((form.paymentMethod === 'upi' || form.paymentMethod === 'bank_transfer') && remaining > 0.001 && !String(form.paymentRef || '').trim()) {
-      toast.error('Enter the payment reference for UPI or Bank Transfer')
+      toast.error('Enter the payment reference for Bank Transfer')
       return
     }
     if (form.paymentMethod === 'cash' && remaining > 0.001) {
@@ -318,7 +322,7 @@ export default function InvoiceFormPage() {
           ? Number(form.cashCollected)
           : undefined,
         store_credit_amount: creditUse > 0 ? creditUse : undefined,
-        payment_ref: form.paymentMethod === 'upi' || form.paymentMethod === 'bank_transfer'
+        payment_ref: ['upi', 'cheque', 'bank_transfer'].includes(form.paymentMethod)
           ? (form.paymentRef || '').trim() || null
           : null,
         notes: form.notes,
