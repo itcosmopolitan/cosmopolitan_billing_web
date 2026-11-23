@@ -323,6 +323,31 @@ export default function SalesTxnDetailPanel({
         </>
       )}
 
+      {kind === 'return' && (
+        <>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => {
+              onPrint?.(detail, branchLookup?.(detail) || null, kind)
+              onClose?.()
+            }}
+          >
+            Print credit note
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => {
+              onExport?.(detail, branchLookup?.(detail) || null, kind)
+              onClose?.()
+            }}
+          >
+            Download PDF
+          </button>
+        </>
+      )}
+
       {kind === 'return' && detail?.status !== 'void' && (
         <>
           {can('invoices.create') && (

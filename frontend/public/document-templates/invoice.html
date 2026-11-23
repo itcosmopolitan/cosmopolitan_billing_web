@@ -328,8 +328,9 @@
     const isGrnReceipt = documentType === 'GRN Receipt'
     const isPurchaseDocument = isPurchaseOrder || isPurchaseBill || isGrnReceipt
     const isSalesOrder = documentType === 'Sales Order'
+    const isCreditNote = documentType === 'Credit Note'
     const hasValue = (value) => value != null && String(value).trim() !== ''
-    const documentNumberLabel = isPurchaseOrder ? 'Purchase Order No.' : isPurchaseBill ? 'Bill No.' : isGrnReceipt ? 'GRN No.' : isSalesOrder ? 'Sales Order No.' : 'Invoice No.'
+    const documentNumberLabel = isPurchaseOrder ? 'Purchase Order No.' : isPurchaseBill ? 'Bill No.' : isGrnReceipt ? 'GRN No.' : isSalesOrder ? 'Sales Order No.' : isCreditNote ? 'Credit Note No.' : 'Invoice No.'
     const purchaseOrderNumber = sale.purchaseOrderNumber || sale.purchase_order_number || sale.poNumber || sale.po_number || ''
     const paymentTerms = sale.customerCreditTerms || sale.customer_credit_terms || sale.paymentTerms || sale.payment_terms || ''
     const displayPaymentTerms = /^\d+(?:\.\d+)?$/.test(String(paymentTerms).trim()) ? `${String(paymentTerms).trim()} days` : paymentTerms
@@ -347,7 +348,9 @@
       sale.customerPostalCode || sale.customer_postal_code || sale.postal_code,
     ].filter((part) => typeof part === 'string' && part.trim()).map((part) => part.trim())
     const customerAddress = rawAddress ? Array.isArray(rawAddress) ? rawAddress.filter(Boolean).join(', ') : rawAddress : addressParts.join(', ')
-    const remarks = sale.notes || sale.remark || sale.remarks || ''
+    const remarks = isCreditNote
+      ? [sale.reason, sale.notes].filter(hasValue).join(' — ')
+      : sale.notes || sale.remark || sale.remarks || ''
     const quotationNumber = sale.quotationNumber || sale.quotation_number || sale.quotationNo || sale.quotation_no || ''
     const salesPerson = sale.customerKeyAccountManagerName || sale.customer_key_account_manager_name || sale.customerKeyAccountManager || sale.customer_key_account_manager || ''
     const cashier = sale.cashier || sale.cashierName || sale.cashier_name || ''
@@ -377,12 +380,14 @@
       : isPurchaseBill ? 'Purchase Bill Total (Inc. GST)'
         : isGrnReceipt ? 'Goods Receipt Total (Inc. GST)'
           : isSalesOrder ? 'Total Order Value (Inc. GST)'
-            : 'Total Payable (Inc. GST)'
+            : isCreditNote ? 'Credit Note Total (Inc. GST)'
+              : 'Total Payable (Inc. GST)'
     const footerText = isPurchaseOrder ? 'Please quote this purchase order number on all invoices and correspondence.'
       : isPurchaseBill ? 'Please retain this purchase bill for your records.'
         : isGrnReceipt ? 'Please verify the quantities and condition of the goods received.'
-          : 'Disclaimer: Jurisdiction Male, Republic of Maldives, Supplier can not take any responsibility for product lost or spoil in transit after the delivery point. No return accepted, Overdue outstanding will be subjected to 1% interest per overdue day'
-    const dateLabel = isPurchaseOrder ? 'PO Date' : isPurchaseBill ? 'Bill Date' : isGrnReceipt ? 'Receipt Date' : isSalesOrder ? 'Order Date' : 'Invoice Date'
+          : isCreditNote ? 'This credit note has been issued for the returned goods listed above.'
+            : 'Disclaimer: Jurisdiction Male, Republic of Maldives, Supplier can not take any responsibility for product lost or spoil in transit after the delivery point. No return accepted, Overdue outstanding will be subjected to 1% interest per overdue day'
+    const dateLabel = isPurchaseOrder ? 'PO Date' : isPurchaseBill ? 'Bill Date' : isGrnReceipt ? 'Receipt Date' : isSalesOrder ? 'Order Date' : isCreditNote ? 'Credit Note Date' : 'Invoice Date'
 
     return `
       ${brandHeader(branch)}
@@ -411,8 +416,9 @@
                 ${(isSalesOrder || isPurchaseOrder) && hasValue(sale.expectedDate || sale.expected_date) ? `<tr><td class="label">Expected Date</td><td>${formatDate(sale.expectedDate || sale.expected_date)}</td></tr>` : ''}
                 ${isPurchaseBill && hasValue(sale.dueDate || sale.due_date) ? `<tr><td class="label">Due Date</td><td>${formatDate(sale.dueDate || sale.due_date)}</td></tr>` : ''}
                 ${(isPurchaseBill || isGrnReceipt) && purchaseOrderNumber ? `<tr><td class="label">Purchase Order</td><td class="wrap">${escapeHtml(purchaseOrderNumber)}</td></tr>` : ''}
+                ${isCreditNote && hasValue(sale.invoiceNumber || sale.invoice_number) ? `<tr><td class="label">Against Invoice</td><td class="wrap">${escapeHtml(sale.invoiceNumber || sale.invoice_number)}</td></tr>` : ''}
                 ${!isPurchaseDocument && hasValue(quotationNumber) ? `<tr><td class="label">Quotation No.</td><td class="wrap">${escapeHtml(quotationNumber)}</td></tr>` : ''}
-                ${!isPurchaseDocument && hasValue(displayPaymentTerms) ? `<tr><td class="label">Payment Terms</td><td class="wrap">${escapeHtml(displayPaymentTerms)}</td></tr>` : ''}
+                ${!isPurchaseDocument && !isCreditNote && hasValue(displayPaymentTerms) ? `<tr><td class="label">Payment Terms</td><td class="wrap">${escapeHtml(displayPaymentTerms)}</td></tr>` : ''}
                 ${isPurchaseOrder && hasValue(createdBy) ? `<tr><td class="label">Created By</td><td class="wrap">${escapeHtml(createdBy)}</td></tr>` : !isPurchaseDocument && hasValue(salesPerson) ? `<tr><td class="label">Sales Person</td><td class="wrap">${escapeHtml(salesPerson)}</td></tr>` : ''}
                 ${!isPurchaseDocument && hasValue(cashier) ? `<tr><td class="label">Cashier</td><td class="wrap">${escapeHtml(cashier)}</td></tr>` : ''}
               </table>
@@ -464,7 +470,7 @@
         ${isComplimentary ? '<div class="free-of-charge-note">Free of charge. No amount payable.</div>' : ''}
       </div>
       <div class="keep-together">
-      ${isPurchaseDocument ? '' : `<div class="payment-section">
+      ${isPurchaseDocument || isCreditNote ? '' : `<div class="payment-section">
         <div class="bank-details">
           Bank Details : BMLMVR | Account Number : 7730000271249 | Account Name : COSMOPOLITAN CHAMPA BROTHERS PVT LTD | VIBER : ${escapeHtml(branchMobile)}
         </div>

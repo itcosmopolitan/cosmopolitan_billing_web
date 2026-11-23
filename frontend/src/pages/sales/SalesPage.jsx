@@ -804,7 +804,7 @@ export default function SalesPage() {
     }
   }
 
-  const saleDocumentType = (kind) => (kind === 'order' ? 'Sales Order' : kind === 'quote' ? 'Quote' : 'Tax Invoice')
+  const saleDocumentType = (kind) => (kind === 'order' ? 'Sales Order' : kind === 'quote' ? 'Quote' : kind === 'return' ? 'Credit Note' : 'Tax Invoice')
 
   const runSaleDocumentPdf = async (invoice, branch, kind, mode) => {
     const documentType = saleDocumentType(kind)

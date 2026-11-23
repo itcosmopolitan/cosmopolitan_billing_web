@@ -76,15 +76,21 @@ export async function prepareInvoicePayload(sale, branch, { documentType = 'Tax 
     const isGrnReceipt = documentType === 'GRN Receipt'
     const isPurchaseDocument = isPurchaseOrder || isPurchaseBill || isGrnReceipt
     const isSalesOrder = documentType === 'Sales Order'
+    const isCreditNote = documentType === 'Credit Note'
     const paymentMode = String(sale?.paymentMode || sale?.payment_mode || '').toLowerCase()
     const needsCashPaymentDetails = paymentMode === 'cash' && sale?.cashCollected == null
     const needsPurchaseOrderFetch = sale?.id && (!Array.isArray(sale?.items) || sale.items.length === 0)
+    const needsCreditNoteFetch = sale?.id && (
+      !Array.isArray(sale?.items) || sale.items.length === 0 || !sale.invoiceNumber
+    )
     // List rows carry no line items, so the detail fetch here is the only sale load.
     const needsInvoiceFetch = !sale || (sale?.id && (
       needsCashPaymentDetails || !sale.items?.length || (!sale.customerPhone && !sale.customer_phone) || !sale.salesperson || !sale.email || !sale.phoneNo ||
       !sale.orderNo || !sale.purchaseOrderNo || (!sale.gstNo && !sale.gst_no && !sale.gst)
     ))
-    const needsFetch = fetchSale && (isPurchaseDocument ? needsPurchaseOrderFetch : needsInvoiceFetch)
+    const needsFetch = fetchSale && (isPurchaseDocument
+      ? needsPurchaseOrderFetch
+      : isCreditNote ? needsCreditNoteFetch : needsInvoiceFetch)
     if (needsFetch && sale?.id) {
       const endpoint = isPurchaseOrder
         ? `/api/v1/purchases/orders/${sale.id}`
@@ -92,7 +98,9 @@ export async function prepareInvoicePayload(sale, branch, { documentType = 'Tax 
           ? `/api/v1/purchases/${sale.id}`
           : isGrnReceipt
             ? `/api/v1/purchases/grns/${sale.id}`
-            : isSalesOrder ? `/api/v1/sales/orders/${sale.id}` : `/api/v1/sales/${sale.id}`
+            : isCreditNote
+              ? `/api/v1/sales/returns/${sale.id}`
+              : isSalesOrder ? `/api/v1/sales/orders/${sale.id}` : `/api/v1/sales/${sale.id}`
       const res = await fetch(endpoint, { headers: { Accept: 'application/json', ...authHeaders } })
       if (res.ok) {
         const fetchedSale = await res.json()
@@ -126,6 +134,14 @@ export async function prepareInvoicePayload(sale, branch, { documentType = 'Tax 
         qty: documentType === 'GRN Receipt' ? item.receivedQty ?? item.qty ?? item.orderedQty ?? 0 : item.qty,
         price: item.cost ?? item.price,
         taxRate: item.taxRate ?? item.tax_rate ?? 0,
+      })),
+    }
+  } else if (documentType === 'Credit Note') {
+    fullSale = {
+      ...fullSale,
+      items: (fullSale?.items || []).map((item) => ({
+        ...item,
+        qty: item.returnQty ?? item.return_qty ?? item.qty ?? item.quantity ?? 0,
       })),
     }
   }

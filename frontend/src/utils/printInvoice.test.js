@@ -76,6 +76,46 @@ describe('prepareInvoicePayload for Sales Orders', () => {
   })
 })
 
+describe('prepareInvoicePayload for Credit Notes', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('loads return details and maps returned quantities for the shared document template', async () => {
+    const creditNote = {
+      id: 'return-1',
+      number: 'CN-0001',
+      invoiceNumber: 'INV-0001',
+      customerName: 'Customer',
+      reason: 'Damaged item',
+      items: [{ name: 'Rice', returnQty: 2, price: 10, taxRate: 8 }],
+    }
+    const fetch = vi.fn(async (url) => {
+      if (url === '/api/v1/sales/returns/return-1') {
+        return { ok: true, json: async () => creditNote }
+      }
+      if (url === '/api/v1/settings/organisation') return { ok: false, json: async () => ({}) }
+      throw new Error(`Unexpected fetch URL: ${url}`)
+    })
+    vi.stubGlobal('window', { localStorage: { getItem: () => null } })
+    vi.stubGlobal('fetch', fetch)
+
+    const payload = await prepareInvoicePayload(
+      { id: 'return-1', number: 'CN-0001', customerName: 'Customer' },
+      {},
+      { documentType: 'Credit Note' },
+    )
+
+    expect(fetch).toHaveBeenCalledWith('/api/v1/sales/returns/return-1', expect.any(Object))
+    expect(payload.documentType).toBe('Credit Note')
+    expect(payload.sale).toMatchObject({
+      invoiceNumber: 'INV-0001',
+      reason: 'Damaged item',
+      items: [{ name: 'Rice', qty: 2, price: 10, taxRate: 8 }],
+    })
+  })
+})
+
 describe('prepareInvoicePayload detail loading', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
