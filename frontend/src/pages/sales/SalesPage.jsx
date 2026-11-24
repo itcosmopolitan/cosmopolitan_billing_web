@@ -1936,6 +1936,11 @@ export default function SalesPage() {
                               onClick: () => setSalesDoc({ kind: 'return', data: r }),
                             },
                             {
+                              label: pdfActionLabel(r.id, 'export-return', 'Export PDF', 'Generating PDF…'),
+                              disabled: isRowBusy(r.id),
+                              onClick: () => exportSaleDocument(r, branches.find((branch) => branch.id === r.branchId), 'return'),
+                            },
+                            {
                               label: 'Edit',
                               hidden: !can('invoices.create') || r.status === 'void',
                               disabled: isRowBusy(r.id),

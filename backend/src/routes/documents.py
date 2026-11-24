@@ -52,7 +52,7 @@ def _too_large_detail(max_bytes: int) -> str:
 
 @router.post(
     "/invoice-pdf",
-    dependencies=[Depends(require_perm("sales.view", "reports.view"))],
+    dependencies=[Depends(require_perm("sales.view", "invoices.view", "reports.view"))],
 )
 async def render_invoice_pdf(
     request: Request,

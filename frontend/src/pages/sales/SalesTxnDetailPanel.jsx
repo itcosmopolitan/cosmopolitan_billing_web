@@ -343,7 +343,7 @@ export default function SalesTxnDetailPanel({
               onClose?.()
             }}
           >
-            Download PDF
+            Export PDF
           </button>
         </>
       )}
