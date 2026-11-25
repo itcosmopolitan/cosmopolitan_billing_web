@@ -162,6 +162,11 @@ export default function CustomerFormModal({
       toast.error('Enter a valid email address')
       return
     }
+    const gstNumber = form.gst_in?.trim()
+    if (gstNumber && !/^[0-9]{7}GST[0-9]{3}$/.test(gstNumber)) {
+      toast.error('GST number must be in format 1234567GST123')
+      return
+    }
 
     const token = localStorage.getItem('retailos_token')
     if (!token) { toast.error('Not authenticated'); return }
@@ -279,7 +284,15 @@ export default function CustomerFormModal({
           <input className="form-input" type="email" value={form.email} onChange={(e) => pf('email', e.target.value)} />
         </FormGroup>
         <FormGroup label="GST Reg No">
-          <input className="form-input" value={form.gst_in} onChange={(e) => pf('gst_in', e.target.value)} placeholder="For business customers" />
+          <input
+            className="form-input"
+            value={form.gst_in}
+            onChange={(e) => pf('gst_in', e.target.value.replace(/[^0-9GSTgst]/g, '').toUpperCase())}
+            placeholder="1234567GST123"
+            pattern="[0-9]{7}GST[0-9]{3}"
+            maxLength={13}
+            inputMode="text"
+          />
         </FormGroup>
       </FormRow>
       <FormGroup label="Street 1" required>

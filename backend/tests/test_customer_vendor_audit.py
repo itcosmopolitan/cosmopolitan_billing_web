@@ -3,6 +3,8 @@ from io import BytesIO
 from types import SimpleNamespace
 
 import openpyxl
+import pytest
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -11,8 +13,23 @@ from starlette.datastructures import UploadFile
 from src.customer_import_worker import process_customer_import
 from src.database import Base
 from src.models import AuditLog, Branch, Customer, User, Vendor
-from src.routes.customers import CustomerCreate, CustomerUpdate, create_customer, delete_customer, patch_customer, update_customer
-from src.routes.vendors import VendorCreate, VendorUpdate, create_vendor, delete_vendor, import_vendors, patch_vendor, update_vendor
+from src.routes.customers import (
+    CustomerCreate,
+    CustomerUpdate,
+    create_customer,
+    delete_customer,
+    patch_customer,
+    update_customer,
+)
+from src.routes.vendors import (
+    VendorCreate,
+    VendorUpdate,
+    create_vendor,
+    delete_vendor,
+    import_vendors,
+    patch_vendor,
+    update_vendor,
+)
 
 
 async def _build_session():
@@ -55,6 +72,28 @@ def _run(scenario):
             await engine.dispose()
 
     asyncio.run(wrapper())
+
+
+def test_customer_gst_number_format():
+    valid = CustomerCreate(
+        name="Acme",
+        gst_in="1234567GST123",
+        branch_id="b1",
+        street1="1 Road",
+        city="Chennai",
+        country="India",
+    )
+    assert valid.gst_in == "1234567GST123"
+
+    with pytest.raises(ValidationError, match="GST number must be in format 1234567GST123"):
+        CustomerCreate(
+            name="Acme",
+            gst_in="1234567ABC123",
+            branch_id="b1",
+            street1="1 Road",
+            city="Chennai",
+            country="India",
+        )
 
 
 def test_customer_create_update_deactivate_delete_are_audited():

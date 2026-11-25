@@ -11,17 +11,18 @@ from io import BytesIO
 import openpyxl
 from sqlalchemy import and_, func, or_, select
 
-from src.database import get_async_session, init_schema
 from src.customer_kam import KAM_BRANCH_COLUMN_PREFIX, merge_legacy_kam, save_branch_kams
+from src.database import get_async_session, init_schema
 from src.models import Branch, Customer, CustomerImportJob, User
+from src.routes._serializers import _build_customer_code
 from src.routes.customers import (
     _compose_address_from_parts,
     _normalize_classification,
     _normalize_customer_type,
+    _normalize_gst_number,
     customer_audit_snapshot,
     record_customer_audit,
 )
-from src.routes._serializers import _build_customer_code
 
 logger = logging.getLogger("cosmopolitan.customer_import_worker")
 
@@ -147,6 +148,7 @@ async def process_customer_import(job: CustomerImportJob, db, progress_callback)
             city = _as_text(data.get("city"))
             if not city:
                 raise ValueError("Required field(s) missing: city")
+            gst_number = _normalize_gst_number(_as_text(data.get("gst_in")))
 
             customer_type = _normalize_customer_type(_as_text(data.get("customer_type")) or "retail")
             classification = _normalize_classification(_as_text(data.get("classification")) or "external")
@@ -177,7 +179,7 @@ async def process_customer_import(job: CustomerImportJob, db, progress_callback)
                 name=name,
                 phone=_as_text(data.get("phone")) or None,
                 email=_as_text(data.get("email")) or None,
-                gstin=_as_text(data.get("gst_in")) or None,
+                gstin=gst_number,
                 branch_id=branch_id,
                 credit_limit=credit_limit,
                 type=customer_type,

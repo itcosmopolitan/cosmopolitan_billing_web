@@ -1,3 +1,4 @@
+import re
 import uuid
 from io import BytesIO
 from typing import Optional, Union
@@ -5,7 +6,7 @@ from typing import Optional, Union
 import openpyxl
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field, StrictInt
+from pydantic import BaseModel, Field, StrictInt, field_validator
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,15 +33,28 @@ from src.models import (
     User,
 )
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
-from src.routes._serializers import _build_customer_code, serialize_customer
-from src.services.audit_service import add_audit_log, diff_snapshots, master_update_action
 from src.permissions import CUSTOMER_PICKER_READ
-from src.security import require_perm, current_user, enforce_branch_access
+from src.routes._serializers import _build_customer_code, serialize_customer
+from src.security import current_user, enforce_branch_access, require_perm
+from src.services.audit_service import add_audit_log, diff_snapshots, master_update_action
 
 router = APIRouter()
 
 _VALID_CUSTOMER_TYPES = frozenset({"retail", "wholesale", "staff"})
 _VALID_CLASSIFICATIONS = frozenset({"external", "internal"})
+GST_NUMBER_PATTERN = re.compile(r"^[0-9]{7}GST[0-9]{3}$")
+GST_NUMBER_ERROR = "GST number must be in format 1234567GST123"
+
+
+def _normalize_gst_number(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if not GST_NUMBER_PATTERN.fullmatch(normalized):
+        raise HTTPException(400, detail=GST_NUMBER_ERROR)
+    return normalized
 
 
 class CustomerCreate(BaseModel):
@@ -65,6 +79,18 @@ class CustomerCreate(BaseModel):
     state_province: Optional[str] = None
     country: str
     postal_code: Optional[str] = None
+
+    @field_validator("gst_in")
+    @classmethod
+    def validate_gst_number(cls, value):
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        if not GST_NUMBER_PATTERN.fullmatch(normalized):
+            raise ValueError(GST_NUMBER_ERROR)
+        return normalized
 
 
 class CustomerUpdate(BaseModel):
@@ -103,6 +129,18 @@ class CustomerUpdate(BaseModel):
     postal_code: Optional[str] = None
     notes: Optional[str] = None
     active: Optional[bool] = None
+
+    @field_validator("gst_in")
+    @classmethod
+    def validate_gst_number(cls, value):
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        if not GST_NUMBER_PATTERN.fullmatch(normalized):
+            raise ValueError(GST_NUMBER_ERROR)
+        return normalized
 
 
 def _normalize_customer_type(customer_type: Optional[str]) -> str:
@@ -428,7 +466,7 @@ def _customer_import_job_response(job: CustomerImportJob) -> dict:
 
 
 @router.get("/import/template", dependencies=[Depends(require_perm("customers.create"))])
-async def download_customer_import_template():
+async def download_customer_import_template(db: AsyncSession = Depends(get_db)):
     """Generate an Excel template for bulk customer imports."""
     branches = (
         await db.execute(
