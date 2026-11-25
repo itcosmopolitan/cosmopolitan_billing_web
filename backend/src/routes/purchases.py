@@ -2,7 +2,7 @@ import json
 import math
 import uuid
 from datetime import datetime
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -41,6 +41,7 @@ from src.qty import as_qty, coerce_qty_value
 from src.routes.sales import _normalize_gstin
 from src.routes._grn_stock import (
     ReceiptLine,
+    adjust_branch_cost_for_stock_change,
     format_branch_cost_change_detail,
     grn_batches_consumed,
     receive_lines_to_stock,
@@ -1675,6 +1676,12 @@ async def cancel_bill(bill_id: str, db: AsyncSession = Depends(get_db), user: Us
             400,
             "Cannot cancel a bill with active payment allocations. Void or delete payments first.",
         )
+    if b.grn_id:
+        grn = (await db.execute(
+            select(GoodsReceiptNote).where(GoodsReceiptNote.id == b.grn_id)
+        )).scalar_one_or_none()
+        if grn and grn.converted_bill_id == b.id:
+            grn.converted_bill_id = None
     prev_status = bill_status
     b.status = "cancelled"
     await sync_vendor_outstanding(db, b.vendor_id)
@@ -1691,6 +1698,170 @@ async def cancel_bill(bill_id: str, db: AsyncSession = Depends(get_db), user: Us
 
 
 # ─── UPDATE (EDIT) ────────────────────────────────────────────────────────────
+async def _get_auto_bill_grn_for_edit(
+    db: AsyncSession,
+    bill: PurchaseBill,
+) -> Optional[GoodsReceiptNote]:
+    if not bill.grn_id:
+        return None
+    result = await db.execute(
+        select(GoodsReceiptNote)
+        .options(selectinload(GoodsReceiptNote.line_items))
+        .where(GoodsReceiptNote.id == bill.grn_id)
+    )
+    grn = result.unique().scalar_one_or_none()
+    if grn is None:
+        raise HTTPException(400, "The bill's linked GRN no longer exists; receipt items cannot be edited.")
+    if grn.converted_bill_id != bill.id:
+        raise HTTPException(
+            400,
+            "This bill is not the linked bill for its GRN; edit the receipt through the GRN workflow.",
+        )
+    external_history = (await db.execute(
+        select(AuditLog.id).where(
+            AuditLog.record_type == "grn",
+            AuditLog.record_id == grn.id,
+            AuditLog.event_type.in_(("created", "verified", "approved")),
+        ).limit(1)
+    )).scalar_one_or_none()
+    if external_history:
+        raise HTTPException(
+            400,
+            "This bill was created from a separately received GRN. Edit the receipt in the GRN workflow first.",
+        )
+    grn_status = str(grn.status.value) if hasattr(grn.status, "value") else str(grn.status)
+    if grn_status != GRNStatus.received.value:
+        raise HTTPException(400, f"Cannot edit receipt lines while linked GRN is {grn_status}")
+    return grn
+
+
+async def _replace_auto_bill_grn_lines(
+    db: AsyncSession,
+    *,
+    bill: PurchaseBill,
+    grn: GoodsReceiptNote,
+    line_rows: list,
+    subtotal: float,
+    tax_total: float,
+    total: float,
+    discount: float,
+    date: str,
+    vendor_id: str,
+    vendor_name: str,
+    user: Optional[User],
+) -> None:
+    old_lines = list(grn.line_items or [])
+    if await grn_batches_consumed(db, grn.id):
+        raise HTTPException(
+            400,
+            "Cannot edit this bill's receipt because stock from the GRN has already been consumed.",
+        )
+    old_movements = [
+        {
+            "item_id": li.item_id,
+            "name": li.name,
+            "qty": li.received_qty,
+            "unit_cost": li.cost,
+        }
+        for li in old_lines
+    ]
+    next_lines: list[tuple[Any, float, Optional[GRNLineItem], ReceiptLine]] = []
+    old_by_item: dict[Optional[str], list[GRNLineItem]] = {}
+    for old_line in old_lines:
+        old_by_item.setdefault(old_line.item_id, []).append(old_line)
+    old_offsets: dict[Optional[str], int] = {}
+    receipt_lines: list[ReceiptLine] = []
+    for line, line_net, _line_tax in line_rows:
+        item_id = line.item_id
+        offset = old_offsets.get(item_id, 0)
+        matches = old_by_item.get(item_id, [])
+        previous = matches[offset] if offset < len(matches) else None
+        old_offsets[item_id] = offset + 1
+        receipt_line = ReceiptLine(
+            item_id=item_id,
+            name=line.name,
+            qty=line.qty,
+            cost=line.cost,
+            batch_number=previous.batch_number if previous else None,
+            mfg_date=previous.mfg_date if previous else None,
+            expiry_date=previous.expiry_date if previous else None,
+        )
+        next_lines.append((line, line_net, previous, receipt_line))
+        receipt_lines.append(receipt_line)
+
+    try:
+        await reverse_grn_stock(
+            db, grn_id=grn.id, branch_id=grn.branch_id, line_items=old_lines,
+        )
+        reversal_changes = await adjust_branch_cost_for_stock_change(
+            db,
+            branch_id=grn.branch_id,
+            movements=old_movements,
+            direction="outflow",
+            user=user,
+            source_type="purchase_bill_edit",
+            source_id=bill.id,
+            source_number=bill.number,
+            branch_name=grn.branch_name,
+        )
+        for old_line in old_lines:
+            await db.delete(old_line)
+        await db.flush()
+
+        grn.vendor_id = vendor_id
+        grn.vendor_name = vendor_name
+        grn.date = date
+        grn.subtotal = round(subtotal, 2)
+        grn.tax_total = round(tax_total, 2)
+        grn.discount = round(discount or 0, 2)
+        grn.total = round(total, 2)
+        for line, line_net, previous, receipt_line in next_lines:
+            db.add(GRNLineItem(
+                id=str(uuid.uuid4()),
+                grn_id=grn.id,
+                po_line_id=previous.po_line_id if previous else None,
+                item_id=line.item_id,
+                name=line.name,
+                ordered_qty=previous.ordered_qty if previous else None,
+                received_qty=as_qty(line.qty),
+                cost=line.cost,
+                tax_rate=line.tax_rate or 0,
+                discount=line.discount or 0,
+                line_total=round(line_net, 2),
+                batch_number=receipt_line.batch_number,
+                mfg_date=receipt_line.mfg_date,
+                expiry_date=receipt_line.expiry_date,
+            ))
+        await db.flush()
+        receipt_changes = await receive_lines_to_stock(
+            db,
+            grn_id=grn.id,
+            branch_id=grn.branch_id,
+            vendor_id=vendor_id,
+            received_date=date,
+            lines=receipt_lines,
+            user=user,
+            source_number=grn.number,
+            branch_name=grn.branch_name,
+            activity_source_type="purchase_bill",
+            activity_source_id=bill.id,
+            activity_source_number=bill.number,
+        )
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(400, str(exc)) from exc
+
+    _log_branch_cost_document_activity(
+        db,
+        user=user,
+        cost_changes=reversal_changes + receipt_changes,
+        grn_id=grn.id,
+        grn_number=grn.number,
+        bill_id=bill.id,
+        bill_number=bill.number,
+    )
+
+
 @router.put("/{bill_id}", dependencies=[Depends(require_perm("bills.edit", "bills.create", "purchases.edit", "purchases.create"))])
 async def update_bill(
     bill_id: str,
@@ -1769,6 +1940,24 @@ async def update_bill(
     tax_mode = await _get_org_tax_mode(db)
     line_rows, subtotal, tax_total_val = _calc_po_lines(data.items, tax_mode, data.discount or 0)
     total = round(subtotal + tax_total_val, 2)
+
+    if item_changes and bill.grn_id:
+        grn = await _get_auto_bill_grn_for_edit(db, bill)
+        if grn is not None:
+            await _replace_auto_bill_grn_lines(
+                db,
+                bill=bill,
+                grn=grn,
+                line_rows=line_rows,
+                subtotal=subtotal,
+                tax_total=tax_total_val,
+                total=total,
+                discount=data.discount or 0,
+                date=data.date or bill.date,
+                vendor_id=data.vendor_id or bill.vendor_id,
+                vendor_name=data.vendor_name if data.vendor_name is not None else bill.vendor_name,
+                user=user,
+            )
 
     if data.vendor_id:
         bill.vendor_id = data.vendor_id
@@ -2681,8 +2870,16 @@ async def _already_returned_for_bill(
     return {row[0]: int(row[1]) for row in res.all() if row[0]}
 
 
-async def _reverse_vendor_return_effects(db: AsyncSession, ret: VendorReturn) -> None:
+async def _reverse_vendor_return_effects(
+    db: AsyncSession,
+    ret: VendorReturn,
+    *,
+    user: Optional[User] = None,
+    source_type: str = "vendor_return_void",
+) -> float:
     """Undo stock + bill adjustments from a processed vendor return."""
+    cost_movements = []
+    restored_total = 0.0
     for rl in ret.line_items:
         if not rl.batch_allocation:
             continue
@@ -2713,8 +2910,30 @@ async def _reverse_vendor_return_effects(db: AsyncSession, ret: VendorReturn) ->
                         source_type="vendor_return",
                         source_ref=ret.id,
                     )
+                    restored = True
                 except ValueError:
                     pass
+            if restored and "unit_cost" in entry:
+                cost_movements.append({
+                    "item_id": rl.item_id,
+                    "name": rl.name,
+                    "qty": qty,
+                    "unit_cost": entry["unit_cost"],
+                })
+            if restored:
+                restored_total += qty
+
+    await adjust_branch_cost_for_stock_change(
+        db,
+        branch_id=ret.branch_id,
+        movements=cost_movements,
+        direction="inflow",
+        user=user,
+        source_type=source_type,
+        source_id=ret.id,
+        source_number=ret.number,
+        branch_name=ret.branch_name,
+    )
 
     bill = (await db.execute(
         select(PurchaseBill).where(PurchaseBill.id == ret.bill_id)
@@ -2730,6 +2949,7 @@ async def _reverse_vendor_return_effects(db: AsyncSession, ret: VendorReturn) ->
             bill.status = "partial"
         else:
             bill.status = "pending"
+    return restored_total
 
 @router.get("/returns/", dependencies=[Depends(require_perm(*PURCHASE_DOCUMENT_READ))])
 async def list_returns(
@@ -2834,7 +3054,7 @@ async def update_return(
     if data.bill_id != ret.bill_id:
         raise HTTPException(400, "Cannot change the bill on a return — void and recreate instead")
 
-    await _reverse_vendor_return_effects(db, ret)
+    await _reverse_vendor_return_effects(db, ret, user=user)
     await db.execute(sa_delete(ReturnLineItem).where(ReturnLineItem.return_id == ret.id))
     await db.flush()
     await recalc_bill_after_vendor_credit(db, ret.bill_id)
@@ -2983,6 +3203,7 @@ async def _apply_vendor_return(
         )
         db.add(ret)
 
+    cost_movements = []
     for r, bill_line, _ln, _lt in return_rows:
         # 2026-05-31: a vendor return SENDS GOODS BACK to the vendor, so it
         # must DECREMENT stock at the bill's branch (previously this was a
@@ -2995,6 +3216,7 @@ async def _apply_vendor_return(
         # so the session rolls back cleanly.
         allocation_json = None
         if r.item_id:
+            bill_unit_cost = float(bill_line.cost or 0)
             tracked, _expiry_tracked = await is_tracked(db, r.item_id)
             if not tracked:
                 # Untracked: aggregate decrement, blocked if it would go < 0.
@@ -3011,7 +3233,11 @@ async def _apply_vendor_return(
                         400,
                         f"{r.name}: not enough stock on hand to return {r.return_qty} unit(s)",
                     )
-                allocation_json = json.dumps([{"batch_id": None, "consumed": as_qty(r.return_qty)}])
+                allocation_json = json.dumps([{
+                    "batch_id": None,
+                    "consumed": as_qty(r.return_qty),
+                    "unit_cost": bill_unit_cost,
+                }])
             else:
                 # 2026-05-31: subtract from THIS BILL's own lot(s) only — the
                 # batch(es) this receipt created (GRN id, or legacy bill id).
@@ -3057,9 +3283,17 @@ async def _apply_vendor_return(
                         400,
                         f"{r.name}: could not subtract {r.return_qty} unit(s) from this bill's batch",
                     )
-                allocation_json = json.dumps(
-                    [{"batch_id": e["batch_id"], "consumed": e["consumed"]} for e in ledger]
-                )
+                allocation_json = json.dumps([{
+                    "batch_id": e["batch_id"],
+                    "consumed": e["consumed"],
+                    "unit_cost": bill_unit_cost,
+                } for e in ledger])
+            cost_movements.append({
+                "item_id": r.item_id,
+                "name": r.name,
+                "qty": as_qty(r.return_qty),
+                "unit_cost": bill_unit_cost,
+            })
         db.add(ReturnLineItem(
             id=str(uuid.uuid4()),
             return_id=ret.id,
@@ -3073,6 +3307,21 @@ async def _apply_vendor_return(
             line_total=round(r.return_qty * r.cost, 2),
             batch_allocation=allocation_json,
         ))
+
+    try:
+        cost_changes = await adjust_branch_cost_for_stock_change(
+            db,
+            branch_id=bill.branch_id,
+            movements=cost_movements,
+            direction="outflow",
+            user=user,
+            source_type="vendor_return",
+            source_id=ret.id,
+            source_number=ret.number,
+            branch_name=bill.branch_name,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
     bill.total = round(max(0.0, float(bill.total or 0) - return_total), 2)
     bill.paid_amount = round(max(0.0, bill_paid - credited), 2)
@@ -3097,6 +3346,7 @@ async def _apply_vendor_return(
             "total": round(float(ret.total or 0), 2),
             "credited_amount": round(float(ret.credited_amount or 0), 2),
             "item_count": len(return_rows),
+            "branch_cost_changes": cost_changes,
             "reason": ret.reason,
             "target_record_type": "purchase_bill",
             "target_record_id": ret.bill_id,
@@ -3162,7 +3412,7 @@ async def void_return(return_id: str, db: AsyncSession = Depends(get_db), user: 
     if getattr(ret, "voided", False):
         return {"status": "void", "number": ret.number}
 
-    await _reverse_vendor_return_effects(db, ret)
+    await _reverse_vendor_return_effects(db, ret, user=user)
     ret.voided = True
     ret.voided_at = datetime.now().strftime("%Y-%m-%d")
     await db.flush()
@@ -3251,6 +3501,7 @@ async def undo_void_vendor_return(return_id: str, db: AsyncSession = Depends(get
     # ── End pre-flight ─────────────────────────────────────────────────────────
 
     # Re-apply original stock effects (re-remove from batches — inverse of void's restore).
+    cost_movements = []
     for rl in ret.line_items:
         if not rl.batch_allocation:
             continue
@@ -3258,10 +3509,18 @@ async def undo_void_vendor_return(return_id: str, db: AsyncSession = Depends(get
             ledger = json.loads(rl.batch_allocation)
         except (ValueError, TypeError):
             ledger = []
+        bill_line = bill_lines_by_id.get(rl.bill_line_id)
+        default_unit_cost = float(bill_line.cost if bill_line else rl.cost or 0)
+        ledger_changed = False
         for entry in ledger:
             qty = as_qty(entry.get("consumed") or 0)
             if qty <= 0:
                 continue
+            unit_cost = entry.get("unit_cost")
+            if unit_cost is None:
+                unit_cost = default_unit_cost
+                entry["unit_cost"] = unit_cost
+                ledger_changed = True
             batch_id = entry.get("batch_id")
             applied = False
             if batch_id:
@@ -3280,8 +3539,33 @@ async def undo_void_vendor_return(return_id: str, db: AsyncSession = Depends(get
                         movement_type="vendor_return_undo_void",
                         source_type="vendor_return", source_ref=ret.id,
                     )
+                    applied = True
                 except ValueError:
                     pass
+            if applied:
+                cost_movements.append({
+                    "item_id": rl.item_id,
+                    "name": rl.name,
+                    "qty": qty,
+                    "unit_cost": unit_cost,
+                })
+        if ledger_changed:
+            rl.batch_allocation = json.dumps(ledger)
+
+    try:
+        cost_changes = await adjust_branch_cost_for_stock_change(
+            db,
+            branch_id=ret.branch_id,
+            movements=cost_movements,
+            direction="outflow",
+            user=user,
+            source_type="vendor_return_undo_void",
+            source_id=ret.id,
+            source_number=ret.number,
+            branch_name=ret.branch_name,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
     # Reverse bill-side effects of the void (bill already loaded above).
     bill.total = round(float(bill.total or 0) - float(ret.total or 0), 2)
@@ -3310,6 +3594,7 @@ async def undo_void_vendor_return(return_id: str, db: AsyncSession = Depends(get
             "target_record_type": "purchase_bill",
             "target_record_id": ret.bill_id,
             "target_record_number": ret.bill_number,
+            "branch_cost_changes": cost_changes,
         },
         risk="medium",
     )
@@ -5535,14 +5820,52 @@ async def cancel_grn(
         return {"status": "cancelled"}
     if grn.converted_bill_id:
         live = (await db.execute(
-            select(PurchaseBill.id).where(PurchaseBill.id == grn.converted_bill_id)
+            select(PurchaseBill).where(PurchaseBill.id == grn.converted_bill_id)
         )).scalar_one_or_none()
-        if live:
+        live_status = (
+            str(live.status.value)
+            if live and hasattr(live.status, "value")
+            else str(live.status) if live else None
+        )
+        if live and live_status != InvoiceStatus.cancelled.value:
             raise HTTPException(400, "Cannot cancel GRN with a live linked bill — cancel the bill first")
+        grn.converted_bill_id = None
     if grn_status == "received" and await grn_batches_consumed(db, grn.id):
         raise HTTPException(400, "Cannot cancel GRN — stock from this receipt has already been consumed")
     if grn_status == "received":
-        await reverse_grn_stock(db, grn_id=grn.id, branch_id=grn.branch_id, line_items=grn.line_items)
+        try:
+            await reverse_grn_stock(
+                db, grn_id=grn.id, branch_id=grn.branch_id, line_items=grn.line_items,
+            )
+            cost_changes = await adjust_branch_cost_for_stock_change(
+                db,
+                branch_id=grn.branch_id,
+                movements=[
+                    {
+                        "item_id": li.item_id,
+                        "name": li.name,
+                        "qty": li.received_qty,
+                        "unit_cost": li.cost,
+                    }
+                    for li in grn.line_items
+                ],
+                direction="outflow",
+                user=user,
+                source_type="grn_cancel",
+                source_id=grn.id,
+                source_number=grn.number,
+                branch_name=grn.branch_name,
+            )
+        except ValueError as exc:
+            await db.rollback()
+            raise HTTPException(400, str(exc)) from exc
+        _log_branch_cost_document_activity(
+            db,
+            user=user,
+            cost_changes=cost_changes,
+            grn_id=grn.id,
+            grn_number=grn.number,
+        )
     grn.status = GRNStatus.cancelled
     _log_grn_history(
         db,
@@ -5900,60 +6223,16 @@ async def bulk_delete_returns(data: BulkDeleteIn, db: AsyncSession = Depends(get
             "bill_number": ret.bill_number, "vendor_id": ret.vendor_id,
             "total": ret.total, "credited_amount": ret.credited_amount,
         }
-        # 2026-05-31: reverse the stock the return removed. Each line carries
-        # a `batch_allocation` ledger (see create_return). NULL = legacy
-        # return that never moved stock → skip (don't inflate stock).
-        for rl in ret.line_items:
-            if not rl.batch_allocation:
-                continue
-            try:
-                ledger = json.loads(rl.batch_allocation)
-            except (ValueError, TypeError):
-                ledger = []
-            for entry in ledger:
-                qty = as_qty(entry.get("consumed") or 0)
-                if qty <= 0:
-                    continue
-                batch_id = entry.get("batch_id")
-                restored = False
-                if batch_id:
-                    # Add the qty back to the exact lot it was drained from.
-                    b = (await db.execute(
-                        select(ItemBatch).where(ItemBatch.id == batch_id)
-                    )).scalar_one_or_none()
-                    if b is not None:
-                        await set_batch_quantity_atomic(
-                            db, batch_id=batch_id, new_qty=as_qty(b.quantity or 0) + qty,
-                        )
-                        restored = True
-                if not restored and rl.item_id:
-                    # Batch was deleted (or untracked sentinel) → restore the
-                    # aggregate count so totals stay correct.
-                    try:
-                        await adjust_stock_atomic(
-                            db, item_id=rl.item_id, branch_id=ret.branch_id, delta=qty,
-                        )
-                    except ValueError:
-                        pass
-                stock_restored += qty
-        # Reverse bill financial adjustments made at return create.
-        bill = (await db.execute(
-            select(PurchaseBill).where(PurchaseBill.id == ret.bill_id)
-        )).scalar_one_or_none()
-        if bill is not None:
-            bill.total = round(float(bill.total or 0) + float(ret.total or 0), 2)
-            bill.paid_amount = round(
-                float(bill.paid_amount or 0) + float(ret.credited_amount or 0), 2,
+        if not ret.voided:
+            stock_restored += await _reverse_vendor_return_effects(
+                db,
+                ret,
+                user=user,
+                source_type="vendor_return_delete",
             )
-            if bill.paid_amount >= bill.total:
-                bill.status = "paid"
-            elif bill.paid_amount > 0:
-                bill.status = "partial"
-            else:
-                bill.status = "pending"
-            await recalc_bill_after_vendor_credit(db, bill.id)
-            if bill.vendor_id:
-                vendor_ids.add(bill.vendor_id)
+            await recalc_bill_after_vendor_credit(db, ret.bill_id)
+        if ret.vendor_id:
+            vendor_ids.add(ret.vendor_id)
         _log_vendor_return_history(db, user=user,
             return_id=ret.id,
             return_number=ret.number,

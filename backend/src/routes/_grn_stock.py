@@ -17,7 +17,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.batch_dates import validate_batch_dates
 from src.item_branch import effective_cost_price, weighted_average_unit_cost
-from src.models import AuditLog, Item, ItemBatch, ItemBranchConfig, ItemStock, User
+from src.models import (
+    AuditLog,
+    GoodsReceiptNote,
+    GRNLineItem,
+    Item,
+    ItemBatch,
+    ItemBranchConfig,
+    ItemStock,
+    StockMovement,
+    User,
+)
 from src.qty import as_qty
 from src.routes._atomic import add_batch_atomic, adjust_stock_atomic, is_tracked, set_batch_quantity_atomic
 from src.routes.items import ensure_item_listed_at_branch
@@ -89,6 +99,160 @@ async def _load_branch_stock_qtys(
         )
     ).all()
     return {row[0]: as_qty(row[1] or 0) for row in rows}
+
+
+async def adjust_branch_cost_for_stock_change(
+    db: AsyncSession,
+    *,
+    branch_id: str,
+    movements: list[dict[str, Any]],
+    direction: str,
+    user: Optional[User],
+    source_type: str,
+    source_id: str,
+    source_number: str,
+    branch_name: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    """Revalue remaining branch stock after vendor-return stock movements.
+
+    Movements carry the quantity and original bill-line unit cost. For an
+    outflow, that value is removed from the pre-movement WAC inventory value;
+    for an inflow (void/delete), it is added back.
+    """
+    if direction not in {"inflow", "outflow"}:
+        raise ValueError(f"Unknown stock-cost direction: {direction}")
+
+    aggregates: dict[str, dict[str, float]] = defaultdict(lambda: {"qty": 0.0, "value": 0.0})
+    names: dict[str, str] = {}
+    for movement in movements:
+        item_id = movement.get("item_id")
+        qty = as_qty(movement.get("qty") or 0)
+        if not item_id or qty <= 0:
+            continue
+        unit_cost = float(movement.get("unit_cost") or 0)
+        if unit_cost < 0:
+            raise ValueError(f"{movement.get('name') or item_id}: unit cost cannot be negative")
+        aggregates[item_id]["qty"] += qty
+        aggregates[item_id]["value"] += qty * unit_cost
+        if movement.get("name"):
+            names[item_id] = movement["name"]
+
+    if not aggregates:
+        return []
+
+    item_ids = list(aggregates)
+    items = {
+        row.id: row
+        for row in (
+            await db.execute(select(Item).where(Item.id.in_(item_ids)))
+        ).scalars().all()
+    }
+    configs = {
+        row.item_id: row
+        for row in (
+            await db.execute(
+                select(ItemBranchConfig).where(
+                    ItemBranchConfig.item_id.in_(item_ids),
+                    ItemBranchConfig.branch_id == branch_id,
+                )
+            )
+        ).scalars().all()
+    }
+    stock_map = await _load_branch_stock_qtys(db, branch_id=branch_id, item_ids=item_ids)
+
+    changes: list[dict[str, Any]] = []
+    for item_id, aggregate in aggregates.items():
+        item = items.get(item_id)
+        if item is None:
+            continue
+        qty = aggregate["qty"]
+        value = aggregate["value"]
+        cfg = configs.get(item_id)
+        old_cost = effective_cost_price(item.cost_price, cfg.cost_price if cfg else None)
+        current_qty = as_qty(stock_map.get(item_id, 0))
+
+        if direction == "outflow":
+            previous_qty = current_qty + qty
+            previous_value = previous_qty * old_cost
+            remaining_value = previous_value - value
+            if remaining_value < -1e-6:
+                raise ValueError(
+                    f"{names.get(item_id) or item.name}: returned purchase value "
+                    f"({value:.2f}) exceeds the branch's current inventory value "
+                    f"({previous_value:.2f}); reconcile stock cost before processing this return"
+                )
+            if current_qty <= 0:
+                continue
+            new_cost = round(max(0.0, remaining_value) / current_qty, 6)
+        else:
+            previous_qty = current_qty - qty
+            if previous_qty < -1e-6:
+                raise ValueError(
+                    f"{names.get(item_id) or item.name}: restored quantity exceeds current stock"
+                )
+            previous_value = max(0.0, previous_qty) * old_cost
+            if current_qty <= 0:
+                continue
+            new_cost = round((previous_value + value) / current_qty, 6)
+
+        if abs(old_cost - new_cost) < 1e-9:
+            continue
+        if cfg is None:
+            cfg = ItemBranchConfig(
+                id=str(uuid.uuid4()),
+                item_id=item_id,
+                branch_id=branch_id,
+                is_available=True,
+                cost_price=new_cost,
+            )
+            db.add(cfg)
+            configs[item_id] = cfg
+        else:
+            cfg.cost_price = new_cost
+        changes.append({
+            "item_id": item_id,
+            "item_name": names.get(item_id) or item.name,
+            "sku": item.sku,
+            "old_cost": round(float(old_cost), 6),
+            "new_cost": new_cost,
+            "purchase_unit": round(value / qty, 6),
+            "purchase_qty": round(qty, 6),
+            "on_hand_qty": round(previous_qty, 6),
+            "method": "weighted_average",
+            "branch_id": branch_id,
+            "movement_direction": direction,
+        })
+
+    if changes:
+        audit_user = user if getattr(user, "role", None) is not None else None
+        _log_branch_cost_item_activities(
+            db,
+            user=audit_user,
+            changes=changes,
+            source_type=source_type,
+            source_id=source_id,
+            source_number=source_number,
+            branch_id=branch_id,
+        )
+        add_audit_log(
+            db,
+            action="Branch Cost Averaged",
+            module="Purchases",
+            reference_id=source_number,
+            detail=format_branch_cost_change_detail(changes),
+            user=audit_user,
+            branch_id=branch_id,
+            metadata={
+                "source_type": source_type,
+                "source_id": source_id,
+                "source_number": source_number,
+                "branch_id": branch_id,
+                "branch_name": branch_name,
+                "changes": changes,
+                "change_count": len(changes),
+            },
+        )
+    return changes
 
 
 async def _apply_averaged_branch_costs(
@@ -202,13 +366,24 @@ def _log_branch_cost_item_activities(
     grn_number: Optional[str] = None,
 ) -> None:
     """Write per-item activity rows for branch cost averages."""
-    source_label = "purchase bill" if source_type == "purchase_bill" else "purchase"
+    source_label = (
+        "purchase bill" if source_type.startswith("purchase_bill")
+        else "GRN cancellation" if source_type == "grn_cancel"
+        else "vendor return" if source_type.startswith("vendor_return")
+        else "purchase"
+    )
+    movement_label = (
+        "reversed" if source_type in {"grn_cancel", "purchase_bill_edit"}
+        else "returned" if source_type in {"vendor_return", "vendor_return_undo_void"}
+        else "restored" if source_type.startswith("vendor_return")
+        else "received"
+    )
     for change in changes:
         detail = (
             f"Branch cost updated (weighted average) from {source_label} ({source_number}): "
             f"{change['old_cost']} → {change['new_cost']} "
             f"(on hand {change.get('on_hand_qty', 0)} @ {change['old_cost']}, "
-            f"received {change.get('purchase_qty', 0)} @ {change['purchase_unit']})"
+            f"{movement_label} {change.get('purchase_qty', 0)} @ {change['purchase_unit']})"
         )
         db.add(AuditLog(
             id=str(uuid.uuid4()),
@@ -365,28 +540,20 @@ async def reverse_grn_stock(
     line_items: list,
 ) -> int:
     """Reverse stock added by a received GRN. Returns units removed."""
-    removed = 0
     batches = (await db.execute(
         select(ItemBatch).where(ItemBatch.source_ref == grn_id)
     )).scalars().all()
+    required_by_item: dict[str, float] = defaultdict(float)
+    batch_item_ids = {b.item_id for b in batches}
     for b in batches:
         qty = as_qty(b.quantity or 0)
-        if qty > 0:
-            try:
-                await adjust_stock_atomic(
-                    db,
-                    item_id=b.item_id,
-                    branch_id=b.branch_id,
-                    delta=-qty,
-                    movement_type="grn_reversal",
-                    source_type="grn",
-                    source_ref=grn_id,
-                )
-                removed += qty
-            except ValueError:
-                pass
-        await db.delete(b)
-    batch_item_ids = {b.item_id for b in batches}
+        if b.branch_id != branch_id:
+            raise ValueError("Cannot reverse GRN stock recorded at a different branch")
+        if qty < as_qty(b.initial_qty or 0):
+            raise ValueError(
+                f"{b.batch_number or b.item_id}: stock from this GRN has already been consumed"
+            )
+        required_by_item[b.item_id] += qty
     for li in line_items:
         if not li.item_id:
             continue
@@ -395,25 +562,88 @@ async def reverse_grn_stock(
             continue
         if li.item_id in batch_item_ids:
             continue
-        try:
+        required_by_item[li.item_id] += qty
+
+    stock_rows = await db.execute(
+        select(ItemStock.item_id, ItemStock.quantity).where(
+            ItemStock.branch_id == branch_id,
+            ItemStock.item_id.in_(required_by_item),
+        )
+    )
+    available_by_item = {item_id: as_qty(qty or 0) for item_id, qty in stock_rows.all()}
+    for item_id, required_qty in required_by_item.items():
+        if available_by_item.get(item_id, 0) + 1e-6 < required_qty:
+            raise ValueError(
+                f"{item_id}: cannot reverse GRN stock; {required_qty:g} units are required "
+                f"but only {available_by_item.get(item_id, 0):g} are available"
+            )
+
+    removed = 0
+    for b in batches:
+        qty = as_qty(b.quantity or 0)
+        if qty > 0:
             await adjust_stock_atomic(
                 db,
-                item_id=li.item_id,
-                branch_id=branch_id,
+                item_id=b.item_id,
+                branch_id=b.branch_id,
                 delta=-qty,
                 movement_type="grn_reversal",
                 source_type="grn",
                 source_ref=grn_id,
             )
             removed += qty
-        except ValueError:
-            pass
+        await db.delete(b)
+    for li in line_items:
+        if not li.item_id or li.item_id in batch_item_ids:
+            continue
+        qty = as_qty(getattr(li, "received_qty", None) or getattr(li, "qty", 0) or 0)
+        if qty <= 0:
+            continue
+        await adjust_stock_atomic(
+            db,
+            item_id=li.item_id,
+            branch_id=branch_id,
+            delta=-qty,
+            movement_type="grn_reversal",
+            source_type="grn",
+            source_ref=grn_id,
+        )
+        removed += qty
     return removed
 
 
 async def grn_batches_consumed(db: AsyncSession, grn_id: str) -> bool:
-    """True if any batch spawned by this GRN has been partially consumed."""
+    """True if receipt stock was consumed, including pooled untracked stock."""
     batches = (await db.execute(
         select(ItemBatch).where(ItemBatch.source_ref == grn_id)
     )).scalars().all()
-    return any(as_qty(b.quantity or 0) < as_qty(b.initial_qty or 0) for b in batches)
+    if any(as_qty(b.quantity or 0) < as_qty(b.initial_qty or 0) for b in batches):
+        return True
+
+    grn = (await db.execute(
+        select(GoodsReceiptNote).where(GoodsReceiptNote.id == grn_id)
+    )).scalar_one_or_none()
+    if grn is None or grn.created_at is None:
+        return False
+    tracking_rows = (await db.execute(
+        select(GRNLineItem.item_id, Item.batch_tracking)
+        .join(Item, Item.id == GRNLineItem.item_id)
+        .where(
+            GRNLineItem.grn_id == grn_id,
+            GRNLineItem.item_id.is_not(None),
+        )
+    )).all()
+    untracked_item_ids = list(dict.fromkeys(
+        item_id for item_id, batch_tracking in tracking_rows if not batch_tracking
+    ))
+    if not untracked_item_ids:
+        return False
+    movement_id = (await db.execute(
+        select(StockMovement.id).where(
+            StockMovement.branch_id == grn.branch_id,
+            StockMovement.item_id.in_(untracked_item_ids),
+            StockMovement.delta < 0,
+            StockMovement.created_at >= grn.created_at,
+        ).limit(1)
+    )).scalar_one_or_none()
+    return movement_id is not None
