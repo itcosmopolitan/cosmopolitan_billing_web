@@ -16,6 +16,7 @@ import { downloadListPdf } from '@/utils/documentPdf'
 import { tabsWithCounts } from '@/utils/moduleSummary'
 import { exportToExcel, fmtDate, fmtDateTime, fmtQty, formatLabel } from '@/utils/helpers'
 import { qtyInputStep } from '@/utils/decimalPrecision'
+import { todayISO } from '@/utils/batchDates'
 import { tableRowClickProps } from '@/utils/tableRowClick'
 import useColumnPrefs from '@/hooks/useColumnPrefs'
 import ListFilters, { EMPTY_LIST_FILTERS } from '@/pages/sales/ListFilters'
@@ -108,6 +109,7 @@ export default function AdjustmentsPage() {
     child_counter_name: '',
     items: [emptyAdjustmentLine()],
     reason: 'Physical count',
+    adjustment_date: todayISO(),
     notes: '',
   })
   const [submitting, setSubmitting] = useState(false)
@@ -370,6 +372,7 @@ export default function AdjustmentsPage() {
           batch_id: line.batch_id || undefined,
         })),
         reason: newForm.reason,
+        adjustment_date: newForm.adjustment_date,
         notes: newForm.notes || undefined,
         requested_by: user?.name || 'Staff',
       })
@@ -384,6 +387,7 @@ export default function AdjustmentsPage() {
         child_counter_name: '',
         items: [emptyAdjustmentLine()],
         reason: 'Physical count',
+        adjustment_date: todayISO(),
         notes: '',
       })
       bumpList()
@@ -877,6 +881,18 @@ export default function AdjustmentsPage() {
             />
           </FormGroup>
         </FormRow>
+        <FormGroup label="Adjustment Date" required>
+          <input
+            className="form-input"
+            type="date"
+            value={newForm.adjustment_date}
+            onChange={(event) => setNewForm((form) => ({
+              ...form,
+              adjustment_date: event.target.value,
+            }))}
+            disabled={submitting}
+          />
+        </FormGroup>
         <div style={{ margin: '4px 0 16px' }}>
           <div className="form-label" style={{ marginBottom: 8 }}>Items to adjust</div>
           <div style={{ overflowX: 'auto' }}>

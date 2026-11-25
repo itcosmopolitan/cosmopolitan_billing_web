@@ -193,6 +193,7 @@ export default function InvoiceEditPage() {
         child_counter_id: selectedCounter?.id || null,
         child_counter_name: selectedCounter?.name || null,
         date: form.invoiceDate,
+        shipment_date: form.shipmentDate || null,
         due_date: form.dueDate || null,
         items: form.items.map((i) => ({
           item_id: i.item_id || null,

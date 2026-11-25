@@ -301,6 +301,7 @@ export default function InvoiceFormPage() {
         child_counter_name: selectedCounter?.name || null,
         cashier: 'Staff',
         date: form.invoiceDate,
+        shipment_date: form.shipmentDate || null,
         items: persistItems.map((i) => ({
           item_id: i.item_id || null,
           name: i.name,

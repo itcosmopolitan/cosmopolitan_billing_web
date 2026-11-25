@@ -318,6 +318,10 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("item_branch_config", "wholesale_discount_pct", "FLOAT"),
     ("item_branch_config", "wholesale_price", "FLOAT"),
     ("item_branch_config", "staff_pricing_mode", "VARCHAR"),
+    ("item_branch_config", "opening_stock_date", "DATE"),
+    ("sale_invoices", "shipment_date", "VARCHAR"),
+    ("adjustment_requests", "adjustment_date", "DATE"),
+    ("stock_movements", "effective_date", "DATE"),
     ("item_branch_config", "staff_discount_pct", "FLOAT"),
     ("item_branch_config", "staff_price", "FLOAT"),
     ("stock_adjustments", "request_id", "VARCHAR"),
@@ -630,6 +634,9 @@ async def init_schema() -> None:
                 logger.info("Schema initialization encountered deadlock (expected with concurrent workers), continuing...")
             else:
                 raise
+    async with engine.connect() as index_conn:
+        autocommit_index_conn = await index_conn.execution_options(isolation_level="AUTOCOMMIT")
+        await _ensure_stock_movement_effective_date_index(autocommit_index_conn)
     logger.info("Schema initialization completed in %.2f seconds", time.perf_counter() - start)
 
 
@@ -1097,6 +1104,17 @@ async def _ensure_stock_pool_indexes(conn) -> None:
         text(
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_sale_invoices_branch_client_request "
             "ON sale_invoices (branch_id, client_request_id)"
+        )
+    )
+
+
+async def _ensure_stock_movement_effective_date_index(conn) -> None:
+    """Create the transaction-date lookup index on upgraded databases."""
+    concurrency = " CONCURRENTLY" if conn.dialect.name == "postgresql" else ""
+    await conn.execute(
+        text(
+            f"CREATE INDEX{concurrency} IF NOT EXISTS ix_stock_movements_item_branch_effective_date "
+            "ON stock_movements (item_id, branch_id, effective_date)"
         )
     )
 

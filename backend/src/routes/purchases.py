@@ -1,6 +1,7 @@
 import json
 import math
 import uuid
+from datetime import date as CalendarDate
 from datetime import datetime
 from typing import Any, List, Literal, Optional
 
@@ -12,14 +13,14 @@ from sqlalchemy.orm import selectinload
 
 from src.batch_dates import validate_batch_dates
 from src.database import get_db
+from src.date_utils import ist_today
 from src.decimal_precision import org_precision
 from src.document_numbering import allocate_number, next_free_prefixed_number, resolve_number
-from src.tax_calc import line_tax_amount, line_taxable_amount, restore_zero_rate, rollup_inclusive_lines
 from src.models import (
     AuditLog,
+    GoodsReceiptNote,
     GRNLineItem,
     GRNStatus,
-    GoodsReceiptNote,
     InvoiceStatus,
     Item,
     ItemBatch,
@@ -30,6 +31,7 @@ from src.models import (
     PurchaseOrderLineItem,
     PurchaseOrderStatus,
     ReturnLineItem,
+    StockMovement,
     User,
     Vendor,
     VendorPayment,
@@ -37,8 +39,24 @@ from src.models import (
     VendorReturn,
 )
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
+from src.permissions import BILL_DOCUMENT_READ, GRN_DOCUMENT_READ, PURCHASE_DOCUMENT_READ
 from src.qty import as_qty, coerce_qty_value
-from src.routes.sales import _normalize_gstin
+from src.routes._approval import assert_may_edit_document, can_direct_commit, user_can, user_can_any
+from src.routes._atomic import (
+    add_batch_atomic,
+    adjust_stock_atomic,
+    consume_batches_atomic,
+    is_tracked,
+    set_batch_quantity_atomic,
+)
+from src.routes._cash_ledger import (
+    first_nonempty,
+    record_cash_out,
+    require_cash_branch_id,
+)
+from src.routes._cash_ledger import (
+    void_cash_entry as void_cash_for_payment,
+)
 from src.routes._grn_stock import (
     ReceiptLine,
     adjust_branch_cost_for_stock_change,
@@ -55,23 +73,10 @@ from src.routes._lifecycle import (
     sync_vendor_outstanding,
 )
 from src.routes._payment_ledger import record_vendor_payment, void_payment_record
-from src.routes._cash_ledger import (
-    first_nonempty,
-    record_cash_out,
-    require_cash_branch_id,
-    void_cash_entry as void_cash_for_payment,
-)
-from src.routes._vendor_credit_ledger import adjust_vendor_credit
-from src.routes._atomic import (
-    add_batch_atomic,
-    adjust_stock_atomic,
-    consume_batches_atomic,
-    is_tracked,
-    set_batch_quantity_atomic,
-)
 from src.routes._serializers import get_user_branch_ids
-from src.routes._approval import assert_may_edit_document, can_direct_commit, user_can, user_can_any
-from src.permissions import BILL_DOCUMENT_READ, GRN_DOCUMENT_READ, PURCHASE_DOCUMENT_READ
+from src.routes._vendor_credit_ledger import adjust_vendor_credit
+from src.routes.items import ensure_item_listed_at_branch
+from src.routes.sales import _normalize_gstin
 from src.security import (
     current_user,
     enforce_branch_access,
@@ -79,8 +84,8 @@ from src.security import (
     get_allowed_branch_ids,
     require_perm,
 )
-from src.routes.items import ensure_item_listed_at_branch
 from src.services.audit_service import build_audit_entry
+from src.tax_calc import line_tax_amount, line_taxable_amount, restore_zero_rate, rollup_inclusive_lines
 
 router = APIRouter()
 
@@ -1811,6 +1816,15 @@ async def _replace_auto_bill_grn_lines(
         grn.vendor_id = vendor_id
         grn.vendor_name = vendor_name
         grn.date = date
+        movement_date = CalendarDate.fromisoformat(date[:10])
+        linked_movements = (await db.execute(
+            select(StockMovement).where(
+                StockMovement.source_type == "grn",
+                StockMovement.source_ref == grn.id,
+            )
+        )).scalars().all()
+        for movement in linked_movements:
+            movement.effective_date = movement_date
         grn.subtotal = round(subtotal, 2)
         grn.tax_total = round(tax_total, 2)
         grn.discount = round(discount or 0, 2)
@@ -1965,6 +1979,15 @@ async def update_bill(
         bill.vendor_name = data.vendor_name
     if data.date:
         bill.date = data.date
+        movement_date = CalendarDate.fromisoformat(data.date[:10])
+        linked_movements = (await db.execute(
+            select(StockMovement).where(
+                StockMovement.source_type == "grn",
+                StockMovement.source_ref == bill.id,
+            )
+        )).scalars().all()
+        for movement in linked_movements:
+            movement.effective_date = movement_date
     bill.due_date = data.due_date
     bill.subtotal = round(subtotal, 2)
     bill.tax_total = round(tax_total_val, 2)
@@ -2847,6 +2870,7 @@ class VendorReturnCreate(BaseModel):
     bill_id: str
     vendor_id: str
     reason: str
+    date: Optional[CalendarDate] = None
     items: List[ReturnLine]
     notes: Optional[str] = None
 
@@ -2900,6 +2924,9 @@ async def _reverse_vendor_return_effects(
                 if b is not None:
                     await set_batch_quantity_atomic(
                         db, batch_id=batch_id, new_qty=as_qty(b.quantity or 0) + qty,
+                        movement_type=source_type,
+                        source_type="vendor_return",
+                        source_ref=ret.id,
                     )
                     restored = True
             if not restored and rl.item_id:
@@ -3154,7 +3181,12 @@ async def _apply_vendor_return(
         subtotal += line_taxable_amount(line_net, r.tax_rate or 0, tax_mode)
         tax_total += line_tax
 
-    today = datetime.now().strftime("%Y-%m-%d")
+    document_date = (
+        data.date.isoformat()
+        if data.date is not None
+        else existing.date if existing is not None
+        else ist_today().isoformat()
+    )
     vendor_result = await db.execute(select(Vendor).where(Vendor.id == data.vendor_id))
     vendor = vendor_result.scalar_one_or_none()
 
@@ -3175,7 +3207,16 @@ async def _apply_vendor_return(
         ret.voided = False
         ret.voided_at = None
         ret.notes = data.notes
-        ret.date = today
+        ret.date = document_date
+        movement_date = CalendarDate.fromisoformat(document_date[:10])
+        linked_movements = (await db.execute(
+            select(StockMovement).where(
+                StockMovement.source_type == "vendor_return",
+                StockMovement.source_ref == ret.id,
+            )
+        )).scalars().all()
+        for movement in linked_movements:
+            movement.effective_date = movement_date
         await db.flush()
     else:
         return_num = await _next_vendor_return_number(db)
@@ -3189,7 +3230,7 @@ async def _apply_vendor_return(
             vendor_name=vendor.name if vendor else data.vendor_id,
             branch_id=bill.branch_id,
             branch_name=bill.branch_name,
-            date=today,
+            date=document_date,
             reason=data.reason,
             subtotal=round(subtotal, 2),
             tax_total=round(tax_total, 2),
@@ -3530,6 +3571,9 @@ async def undo_void_vendor_return(return_id: str, db: AsyncSession = Depends(get
                 if b is not None:
                     await set_batch_quantity_atomic(
                         db, batch_id=batch_id, new_qty=max(0.0, as_qty(b.quantity or 0) - qty),
+                        movement_type="vendor_return_undo_void",
+                        source_type="vendor_return",
+                        source_ref=ret.id,
                     )
                     applied = True
             if not applied and rl.item_id:

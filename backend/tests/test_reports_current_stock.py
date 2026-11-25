@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from src.database import Base
-from src.date_utils import business_day_bounds_utc, business_today
+from src.date_utils import business_day_bounds_utc, business_today, ist_today
 from src.models import (
     Branch,
     Category,
@@ -263,6 +263,124 @@ def test_current_stock_uses_ist_day_boundaries_for_sales_near_midnight():
     assert selected_item["stock"] == 20
     assert previous_item["stock"] == 18
     assert selected_day["reserved_is_current"] is True
+    assert selected_item["reserved_stock"] == 0
+
+
+def test_backdated_receipt_is_included_on_its_effective_date():
+    async def scenario():
+        db = await _build_session()
+        try:
+            db.add(Item(id="i3", name="Receipt", sku="SKU-R", category_id="c1", cost_price=2))
+            db.add(ItemStock(id="s3", item_id="i3", branch_id="b1", quantity=5))
+            db.add(StockMovement(
+                id="receipt-backdated",
+                item_id="i3",
+                branch_id="b1",
+                delta=5,
+                before_qty=0,
+                after_qty=5,
+                movement_type="grn",
+                effective_date=date(2026, 10, 31),
+                created_at=datetime(2026, 11, 1, 18, 0),
+            ))
+            await db.commit()
+            as_of_receipt = await current_stock(
+                branch_id=None, search=None, sort_by="product_code", sort_order="asc",
+                skip=0, limit=50, date_to="2026-10-31", db=db,
+            )
+            day_before = await current_stock(
+                branch_id=None, search=None, sort_by="product_code", sort_order="asc",
+                skip=0, limit=50, date_to="2026-10-30", db=db,
+            )
+            return as_of_receipt["items"], day_before["items"]
+        finally:
+            await db.close()
+
+    receipt_day, previous_day = asyncio.run(scenario())
+    assert next(row for row in receipt_day if row["product_code"] == "SKU-R")["stock"] == 5
+    assert next(row for row in previous_day if row["product_code"] == "SKU-R")["stock"] == 0
+
+
+def test_future_dated_sale_is_excluded_before_its_transaction_date():
+    async def scenario():
+        db = await _build_session()
+        try:
+            await db.execute(
+                ItemStock.__table__.update()
+                .where(ItemStock.item_id == "i1", ItemStock.branch_id == "b1")
+                .values(quantity=15)
+            )
+            db.add(StockMovement(
+                id="sale-future-effective",
+                item_id="i1",
+                branch_id="b1",
+                delta=-5,
+                before_qty=20,
+                after_qty=15,
+                movement_type="sale",
+                effective_date=date(2026, 11, 5),
+                created_at=datetime(2026, 11, 3, 10, 0),
+            ))
+            await db.commit()
+            before_sale = await current_stock(
+                branch_id=None, search=None, sort_by="product_code", sort_order="asc",
+                skip=0, limit=50, date_to="2026-11-04", db=db,
+            )
+            on_sale_date = await current_stock(
+                branch_id=None, search=None, sort_by="product_code", sort_order="asc",
+                skip=0, limit=50, date_to="2026-11-05", db=db,
+            )
+            return before_sale["items"], on_sale_date["items"]
+        finally:
+            await db.close()
+
+    before_sale, on_sale_date = asyncio.run(scenario())
+    assert next(row for row in before_sale if row["product_code"] == "SKU-A")["stock"] == 20
+    assert next(row for row in on_sale_date if row["product_code"] == "SKU-A")["stock"] == 15
+
+
+def test_future_movement_is_removed_from_today_and_movement_only_pairs_are_covered():
+    async def scenario():
+        db = await _build_session()
+        try:
+            today = ist_today()
+            db.add(Branch(id="b2", name="Second", code="SECOND"))
+            db.add_all([
+                StockMovement(
+                    id="future-receipt",
+                    item_id="i1",
+                    branch_id="b1",
+                    delta=5,
+                    before_qty=20,
+                    after_qty=25,
+                    movement_type="grn",
+                    effective_date=today + timedelta(days=1),
+                    created_at=datetime.utcnow(),
+                ),
+                StockMovement(
+                    id="movement-only-pair",
+                    item_id="i1",
+                    branch_id="b2",
+                    delta=3,
+                    before_qty=0,
+                    after_qty=3,
+                    movement_type="grn",
+                    effective_date=today - timedelta(days=1),
+                    created_at=datetime.utcnow(),
+                ),
+            ])
+            await db.commit()
+            page = await current_stock(
+                branch_id=None, search=None, sort_by="product_code", sort_order="asc",
+                skip=0, limit=50, db=db,
+            )
+            return page["items"]
+        finally:
+            await db.close()
+
+    rows = asyncio.run(scenario())
+    assert next(row for row in rows if row["product_code"] == "SKU-A" and row["branch"] == "Main")["stock"] == 15
+    assert next(row for row in rows if row["product_code"] == "SKU-A" and row["branch"] == "Second")["stock"] == 3
 
 
 def test_business_day_bounds_are_half_open_utc_instants():
@@ -294,7 +412,7 @@ def test_current_stock_summary_only_returns_single_total_row():
     async def scenario():
         db = await _build_session()
         try:
-            return await current_stock(
+            summary = await current_stock(
                 branch_id=None,
                 search=None,
                 sort_by="product_name",
@@ -304,10 +422,20 @@ def test_current_stock_summary_only_returns_single_total_row():
                 summary_only=True,
                 db=db,
             )
+            detail = await current_stock(
+                branch_id=None,
+                search=None,
+                sort_by="product_name",
+                sort_order="asc",
+                skip=0,
+                limit=50,
+                db=db,
+            )
+            return summary, detail
         finally:
             await db.close()
 
-    page = asyncio.run(scenario())
+    page, detail = asyncio.run(scenario())
     assert page["total"] == 2
     assert page["skip"] == 0
     assert page["limit"] == 1
@@ -319,6 +447,9 @@ def test_current_stock_summary_only_returns_single_total_row():
     assert row["reserved_stock"] == 5
     assert row["available_qty"] == -3
     assert row["stock_value"] == 200
+    assert row["valuation_basis"] == "valued at current cost"
+    for key in ("stock", "reserved_stock", "available_qty", "stock_value"):
+        assert row[key] == sum(float(item[key]) for item in detail["items"])
 
 
 def test_current_stock_reservations_lists_active_sales_orders_for_item():

@@ -16,6 +16,7 @@ import { useCan } from '@/auth/permissions'
 import { fmt, fmtQty } from '@/utils/helpers'
 import { entryInputStep, roundAmount } from '@/utils/decimalPrecision'
 import { fetchAllPages } from '@/utils/fetchAllPages'
+import { todayISO } from '@/utils/batchDates'
 
 const REASONS = ['Defective', 'Overstocked', 'Wrong Item', 'Quality Issue', 'Damaged', 'Other']
 
@@ -34,6 +35,7 @@ export default function VendorReturnFormPage() {
   const [billLotRemaining, setBillLotRemaining] = useState({})
   const [reason, setReason] = useState('Defective')
   const [notes, setNotes] = useState('')
+  const [returnDate, setReturnDate] = useState(todayISO())
   const [billLoading, setBillLoading] = useState(isEdit)
   const [editLoading, setEditLoading] = useState(isEdit)
   const [editingNumber, setEditingNumber] = useState(null)
@@ -71,6 +73,7 @@ export default function VendorReturnFormPage() {
         setEditingNumber(ret.number)
         setReason(ret.reason || 'Defective')
         setNotes(ret.notes || '')
+        setReturnDate(ret.date || todayISO())
         setSelectedBillId(ret.billId)
         setLocked(true)
         if (ret.vendorId) {
@@ -278,6 +281,7 @@ export default function VendorReturnFormPage() {
         bill_id: bill.id,
         vendor_id: bill.vendorId,
         reason: reason.trim() || 'Other',
+        date: returnDate,
         items,
         notes: notes.trim() || null,
       }
@@ -398,6 +402,15 @@ export default function VendorReturnFormPage() {
                 emptyLabel="No matching bills"
                 style={{ width: '100%', maxWidth: 420 }}
                 disabled={billLoading || locked}
+              />
+            </FormGroup>
+            <FormGroup label="Return Date" required>
+              <input
+                className="form-input"
+                type="date"
+                value={returnDate}
+                onChange={(event) => setReturnDate(event.target.value)}
+                disabled={submitting}
               />
             </FormGroup>
 

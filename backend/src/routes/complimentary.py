@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from src.database import get_db
+from src.date_utils import ist_today
 from src.document_numbering import allocate_number, resolve_number
 from src.models import (
     Branch,
@@ -263,7 +264,7 @@ async def create_complimentary(
         child_counter_id=child_counter_id,
         child_counter_name=child_counter_name,
         created_by=getattr(user, "username", None) or getattr(user, "name", None),
-        date=data.date or datetime.now().strftime("%Y-%m-%d"),
+        date=data.date or ist_today().isoformat(),
         notes=data.notes,
         total_cost=0,
         status=STATUS_APPROVED if direct else STATUS_DRAFT,

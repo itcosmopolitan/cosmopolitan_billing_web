@@ -153,6 +153,7 @@ export const emptyInvoiceForm = (branchId) => ({
   discount: 0,
   discountType: '%',
   invoiceDate: new Date().toISOString().split('T')[0],
+  shipmentDate: '',
   dueDate: '',
   paymentReceived: false,
   paymentMethod: null,
@@ -219,6 +220,7 @@ export function invoiceFromRow(doc, branchId, { withOrderLineId = false, keepNum
     invoiceDate: keepNumber
       ? (doc.date || doc.invoiceDate || todayISO())
       : todayISO(),
+    shipmentDate: keepNumber ? (doc.shipmentDate || doc.shipment_date || '') : '',
     dueDate: doc.dueDate || '',
     paymentReceived: Boolean(doc.paymentMode),
     paymentMethod: doc.paymentMode || null,

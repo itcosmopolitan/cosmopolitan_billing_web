@@ -3,7 +3,7 @@ import hashlib
 import json
 import os
 import uuid
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, UploadFile, File
@@ -33,6 +33,7 @@ from src.models import (
     ItemBatch,
     ItemBranchConfig,
     ItemStock,
+    StockMovement,
     PurchaseBill,
     PurchaseLineItem,
     PurchaseOrder,
@@ -331,6 +332,7 @@ async def _upsert_branch_config(
     staff_pricing_mode: Optional[str] = None,
     staff_discount_pct: Optional[float] = None,
     staff_price: Optional[float] = None,
+    opening_stock_date: Optional[date] = None,
 ) -> ItemBranchConfig:
     res = await db.execute(
         select(ItemBranchConfig).where(
@@ -354,6 +356,8 @@ async def _upsert_branch_config(
         cfg.reorder_level = reorder_level
         for key, value in category_fields.items():
             setattr(cfg, key, value)
+        if opening_stock_date is not None:
+            cfg.opening_stock_date = opening_stock_date
         return cfg
     cfg = ItemBranchConfig(
         id=str(uuid.uuid4()),
@@ -363,6 +367,7 @@ async def _upsert_branch_config(
         cost_price=cost_price,
         selling_price=selling_price,
         reorder_level=reorder_level,
+        opening_stock_date=opening_stock_date,
         **category_fields,
     )
     db.add(cfg)
@@ -460,6 +465,7 @@ async def _seed_opening_stock(
     batch_number: Optional[str] = None,
     mfg_date: Optional[str] = None,
     expiry_date: Optional[str] = None,
+    effective_date: Optional[date] = None,
 ) -> None:
     """Add opening qty at a branch (create or edit). Tracked → new batch lot; untracked → bump stock."""
     if qty <= 0:
@@ -483,6 +489,7 @@ async def _seed_opening_stock(
             source_type="opening",
             source_ref=item.id,
             received_date=mfg_date or None,
+            effective_date=effective_date,
         )
     else:
         await adjust_stock_atomic(
@@ -493,7 +500,27 @@ async def _seed_opening_stock(
             movement_type="adjustment",
             source_type="opening",
             source_ref=item.id,
+            effective_date=effective_date,
         )
+
+
+async def _sync_opening_stock_movement_dates(
+    db: AsyncSession,
+    *,
+    item_id: str,
+    branch_id: str,
+    effective_date: date,
+) -> None:
+    movements = (await db.execute(
+        select(StockMovement).where(
+            StockMovement.item_id == item_id,
+            StockMovement.branch_id == branch_id,
+            StockMovement.source_type == "opening",
+            StockMovement.source_ref == item_id,
+        )
+    )).scalars().all()
+    for movement in movements:
+        movement.effective_date = effective_date
 
 
 def _raise_batch_date_errors(errors: list[str]) -> None:
@@ -786,6 +813,7 @@ class ItemCreate(BaseModel):
     active: Optional[bool] = None
     branch_id: Optional[str] = None
     opening_stock: int = 0
+    opening_stock_date: Optional[date] = None
     branch_id: str = "br-001"
     # Optional opening-batch metadata. Honored only when batch_tracking is
     # true; ignored on legacy untracked items so the existing UI keeps working.
@@ -810,6 +838,7 @@ class BranchConfigIn(BaseModel):
     staff_discount_pct: Optional[float] = None
     staff_price: Optional[float] = None
     opening_stock: int = 0
+    opening_stock_date: Optional[date] = None
     opening_batch_number: Optional[str] = None
     opening_mfg_date: Optional[str] = None
     opening_expiry_date: Optional[str] = None
@@ -1334,6 +1363,7 @@ async def create_item(
                 cost_price=bc.cost_price,
                 selling_price=bc.selling_price,
                 reorder_level=bc.reorder_level,
+                opening_stock_date=bc.opening_stock_date,
                 **_branch_category_pricing_from_payload(bc),
             )
             if bc.is_available:
@@ -1348,6 +1378,7 @@ async def create_item(
                     batch_number=bc.opening_batch_number,
                     mfg_date=bc.opening_mfg_date,
                     expiry_date=bc.opening_expiry_date,
+                    effective_date=bc.opening_stock_date,
                 )
                 seeded_any = True
         if not seeded_any:
@@ -1364,6 +1395,7 @@ async def create_item(
                     batch_number=data.opening_batch_number,
                     mfg_date=data.opening_mfg_date,
                     expiry_date=data.opening_expiry_date,
+                    effective_date=data.opening_stock_date,
                 )
     else:
         await enforce_branch_access(data.branch_id, user=user, db=db)
@@ -1375,6 +1407,7 @@ async def create_item(
             cost_price=None,
             selling_price=None,
             reorder_level=None,
+            opening_stock_date=data.opening_stock_date,
         )
         await _ensure_stock_row(db, item_id=item.id, branch_id=data.branch_id)
         if data.opening_stock and data.opening_stock > 0:
@@ -1387,6 +1420,7 @@ async def create_item(
                 batch_number=data.opening_batch_number,
                 mfg_date=data.opening_mfg_date,
                 expiry_date=data.opening_expiry_date,
+                effective_date=data.opening_stock_date,
             )
 
     # If the caller can directly commit (has approve permission), mark
@@ -2258,6 +2292,11 @@ async def get_item_branches(item_id: str, db: AsyncSession = Depends(get_db)):
             "staff_pricing_mode": cfg.staff_pricing_mode if cfg else None,
             "staff_discount_pct": cfg.staff_discount_pct if cfg else None,
             "staff_price": cfg.staff_price if cfg else None,
+            "opening_stock_date": (
+                cfg.opening_stock_date.isoformat()
+                if cfg and cfg.opening_stock_date
+                else None
+            ),
             "effective_cost_price": effective_cost_price(
                 item.cost_price,
                 cfg.cost_price if cfg else None,
@@ -2355,8 +2394,16 @@ async def update_item_branches(
             cost_price=bc.cost_price,
             selling_price=bc.selling_price,
             reorder_level=bc.reorder_level,
+            opening_stock_date=bc.opening_stock_date,
             **category_pricing,
         )
+        if bc.opening_stock_date is not None:
+            await _sync_opening_stock_movement_dates(
+                db,
+                item_id=item_id,
+                branch_id=bc.branch_id,
+                effective_date=bc.opening_stock_date,
+            )
         if bc.is_available:
             await _ensure_stock_row(db, item_id=item_id, branch_id=bc.branch_id)
         if bc.is_available and int(bc.opening_stock or 0) > 0:
@@ -2371,6 +2418,7 @@ async def update_item_branches(
                 batch_number=bc.opening_batch_number,
                 mfg_date=bc.opening_mfg_date,
                 expiry_date=bc.opening_expiry_date,
+                effective_date=bc.opening_stock_date,
             )
         
         # When a branch is being removed (is_available = False), delete its batches and stock

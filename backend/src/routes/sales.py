@@ -3,6 +3,7 @@ import json
 import math
 import os
 import uuid
+from datetime import date as CalendarDate
 from datetime import datetime
 from typing import List, Literal, Optional
 
@@ -10,7 +11,8 @@ import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, Field, field_validator, model_validator
-from sqlalchemy import and_, func, inspect as sa_inspect, or_, select, text
+from sqlalchemy import and_, func, or_, select, text
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -18,25 +20,26 @@ from sqlalchemy.orm import selectinload
 from src import config
 from src.customer_kam import attach_branch_kam_names, branch_kam_label
 from src.database import get_db
+from src.date_utils import ist_today
+from src.decimal_precision import org_precision
 from src.document_numbering import (
     allocate_customer_payment_number,
     allocate_number,
     next_free_prefixed_number,
     resolve_number,
 )
-from src.tax_calc import line_tax_amount, line_taxable_amount, restore_zero_rate, rollup_inclusive_lines
 from src.models import (
     AuditLog,
     Branch,
     Customer,
     CustomerPayment,
     CustomerPaymentAllocation,
-    InvoiceStatus,
     InvoicePaymentProof,
-    Organisation,
-    ItemBatch,
+    InvoiceStatus,
     Item,
+    ItemBatch,
     ItemBranchConfig,
+    Organisation,
     PoolSaleAllocation,
     Quotation,
     QuotationLineItem,
@@ -49,37 +52,23 @@ from src.models import (
     SalesReturn,
     SalesReturnLineItem,
     SalesReturnStatus,
+    StockMovement,
     User,
 )
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
-from src.decimal_precision import org_precision
+from src.permissions import QUOTATION_DOCUMENT_READ, SALES_DOCUMENT_READ, SALES_ORDER_DOCUMENT_READ
+from src.pool_sales import (
+    consume_clubbed_sale_line,
+    reverse_pool_allocations_for_cancel,
+    reverse_pool_allocations_for_return,
+    undo_pool_allocations_for_return,
+)
 from src.qty import as_qty, qty_eq
-from src.routes._lifecycle import (
-    compute_due_date,
-    recalc_invoice_after_cn,
-    refresh_sale_overdue,
-    reverse_customer_payment,
-    sync_customer_outstanding,
-    _recompute_invoice_status,
-)
-from src.routes._child_counters import validate_child_counter
-from src.routes._credit_ledger import adjust_customer_credit
-from src.routes._payment_ledger import record_customer_payment, void_payment_record
-from src.routes._cash_ledger import (
-    SALE_CASH_CATEGORY,
-    first_nonempty,
-    record_cash_in,
-    record_cash_out,
-    require_cash_branch_id,
-    void_cash_entry as void_cash_for_payment,
-)
-from src.routes._stock_ledger import (
-    fulfil_reservations,
-    get_allow_overselling,
-    get_available_qty,
-    refresh_so_reservations,
-    release_reservations,
-    reserve_for_sales_order,
+from src.routes._approval import (
+    assert_may_edit_document,
+    can_direct_commit,
+    can_direct_pos_bill,
+    user_can,
 )
 from src.routes._atomic import (
     add_batch_atomic,
@@ -91,22 +80,37 @@ from src.routes._atomic import (
     overdraw_stock_atomic,
     set_batch_quantity_atomic,
 )
-from src.pool_sales import (
-    consume_clubbed_sale_line,
-    reverse_pool_allocations_for_cancel,
-    reverse_pool_allocations_for_return,
-    undo_pool_allocations_for_return,
+from src.routes._cash_ledger import (
+    SALE_CASH_CATEGORY,
+    first_nonempty,
+    record_cash_in,
+    record_cash_out,
+    require_cash_branch_id,
 )
-from src.stock_pools import active_pool_for_branch, active_pool_members, user_has_permission
-from src.routes.dashboard import invalidate_dashboard_cache_for_user
+from src.routes._cash_ledger import (
+    void_cash_entry as void_cash_for_payment,
+)
+from src.routes._child_counters import validate_child_counter
+from src.routes._credit_ledger import adjust_customer_credit
+from src.routes._lifecycle import (
+    _recompute_invoice_status,
+    compute_due_date,
+    recalc_invoice_after_cn,
+    refresh_sale_overdue,
+    reverse_customer_payment,
+    sync_customer_outstanding,
+)
+from src.routes._payment_ledger import record_customer_payment, void_payment_record
 from src.routes._serializers import _build_customer_code, get_user_branch_ids
-from src.routes._approval import (
-    assert_may_edit_document,
-    can_direct_commit,
-    can_direct_pos_bill,
-    user_can,
+from src.routes._stock_ledger import (
+    fulfil_reservations,
+    get_allow_overselling,
+    get_available_qty,
+    refresh_so_reservations,
+    release_reservations,
+    reserve_for_sales_order,
 )
-from src.permissions import QUOTATION_DOCUMENT_READ, SALES_DOCUMENT_READ, SALES_ORDER_DOCUMENT_READ
+from src.routes.dashboard import invalidate_dashboard_cache_for_user
 from src.security import (
     current_user,
     enforce_branch_access,
@@ -115,6 +119,8 @@ from src.security import (
     require_perm,
 )
 from src.services.audit_service import add_audit_log, build_audit_entry
+from src.stock_pools import active_pool_for_branch, active_pool_members, user_has_permission
+from src.tax_calc import line_tax_amount, line_taxable_amount, restore_zero_rate, rollup_inclusive_lines
 
 router = APIRouter()
 
@@ -707,6 +713,7 @@ class SaleCreate(BaseModel):
     child_counter_name: Optional[str] = None
     cashier: str = "Staff"
     date: Optional[str] = None          # defaults to today
+    shipment_date: Optional[CalendarDate] = None
     items: List[LineItemIn]
     discount: float = 0
     number: Optional[str] = None
@@ -759,6 +766,7 @@ class InvoiceUpdate(BaseModel):
     child_counter_id: Optional[str] = None
     child_counter_name: Optional[str] = None
     date: Optional[str] = None
+    shipment_date: Optional[CalendarDate] = None
     due_date: Optional[str] = None
     items: List[LineItemIn]
     discount: float = 0
@@ -1722,6 +1730,10 @@ async def update_invoice(
         inv.customer_name = data.customer_name
     if data.date:
         inv.date = data.date
+    if "shipment_date" in data.model_fields_set:
+        inv.shipment_date = (
+            data.shipment_date.isoformat() if data.shipment_date is not None else None
+        )
     customer_changed = inv.customer_id != prev_customer_id
     if customer_changed:
         updated_customer = None
@@ -1835,6 +1847,15 @@ async def update_invoice(
         metadata={"total": round(float(inv.total or 0), 2), "status": str(inv.status.value) if hasattr(inv.status, "value") else str(inv.status)},
         branch_id=inv.branch_id,
     )
+    effective_sale_date = CalendarDate.fromisoformat((inv.shipment_date or inv.date)[:10])
+    linked_movements = (await db.execute(
+        select(StockMovement).where(
+            StockMovement.source_type == "sale_invoice",
+            StockMovement.source_ref.in_((inv.id, inv.number)),
+        )
+    )).scalars().all()
+    for movement in linked_movements:
+        movement.effective_date = effective_sale_date
     await db.commit()
     await _write_post_commit_audit(
         db,
@@ -1930,7 +1951,7 @@ async def create_invoice(
     for i in data.items:
         if not i.name or i.qty <= 0:
             raise HTTPException(400, "Each item must have a name and positive quantity")
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = ist_today().isoformat()
     inv_origin_early = (data.origin or "invoice").strip().lower() or "invoice"
     so_items_locked = False
     if data.quotation_id:
@@ -2126,6 +2147,7 @@ async def create_invoice(
         cashier=(user.name if user is not None else data.cashier),
         created_by=(user.name if user is not None else data.cashier),
         date=invoice_date,
+        shipment_date=data.shipment_date.isoformat() if data.shipment_date else None,
         subtotal=round(subtotal, 2),
         tax_total=round(tax_total, 2),
         discount=round(data.discount, 2),
@@ -3596,7 +3618,7 @@ async def update_payment(
 
     total_credit = 0.0
     total_amount = 0.0
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = ist_today().isoformat()
     status_before: dict[str, str] = {}
     for a in data.allocations:
         inv = inv_by_id[a.invoice_id]
@@ -4566,6 +4588,9 @@ async def _restock_invoice_lines(
                 if b is not None:
                     await set_batch_quantity_atomic(
                         db, batch_id=bid, new_qty=as_qty(b.quantity or 0) + qty,
+                        movement_type=reversal_movement_type,
+                        source_type=source_type,
+                        source_ref=inv.id,
                     )
                 else:
                     try:
@@ -4626,6 +4651,9 @@ async def _reverse_sales_return_effects(db: AsyncSession, ret: SalesReturn) -> f
                 if b is not None:
                     await set_batch_quantity_atomic(
                         db, batch_id=bid, new_qty=max(0, as_qty(b.quantity or 0) - qty),
+                        movement_type="return",
+                        source_type="sales_return",
+                        source_ref=ret.id,
                     )
                 elif rl.item_id:
                     try:
@@ -5077,6 +5105,8 @@ def _inv_dict(inv, items=None, sales_order_number=None, *, sales_order_id=None, 
         "child_counter_id": getattr(inv, "child_counter_id", None),
         "cashier": inv.cashier,
         "date": inv.date,
+        "shipmentDate": getattr(inv, "shipment_date", None),
+        "shipment_date": getattr(inv, "shipment_date", None),
         "paymentTerms": getattr(inv, "customer_credit_terms_snapshot", None) or getattr(inv, "payment_terms", None),
         "payment_terms": getattr(inv, "customer_credit_terms_snapshot", None) or getattr(inv, "payment_terms", None),
         "subtotal": inv.subtotal,
@@ -7886,7 +7916,12 @@ async def undo_void_return(return_id: str, db: AsyncSession = Depends(get_db), u
                     select(ItemBatch).where(ItemBatch.id == bid)
                 )).scalar_one_or_none()
                 if b is not None:
-                    await set_batch_quantity_atomic(db, batch_id=bid, new_qty=as_qty(b.quantity or 0) + qty)
+                    await set_batch_quantity_atomic(
+                        db, batch_id=bid, new_qty=as_qty(b.quantity or 0) + qty,
+                        movement_type="return",
+                        source_type="sales_return",
+                        source_ref=ret.id,
+                    )
                 elif rl.item_id:
                     try:
                         await adjust_stock_atomic(
@@ -7909,6 +7944,9 @@ async def undo_void_return(return_id: str, db: AsyncSession = Depends(get_db), u
                 await adjust_stock_atomic(
                     db, item_id=rl.item_id, branch_id=ret.branch_id,
                     delta=local_qty,
+                    movement_type="return",
+                    source_type="sales_return",
+                    source_ref=ret.id,
                 )
             except ValueError:
                 pass
@@ -8348,10 +8386,19 @@ async def _apply_sales_return(
     else:
         credited = 0.0
 
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = ist_today().isoformat()
     if existing is not None:
         ret = existing
         ret.date = data.date or today
+        movement_date = CalendarDate.fromisoformat(ret.date[:10])
+        linked_movements = (await db.execute(
+            select(StockMovement).where(
+                StockMovement.source_type == "sales_return",
+                StockMovement.source_ref == ret.id,
+            )
+        )).scalars().all()
+        for movement in linked_movements:
+            movement.effective_date = movement_date
         ret.reason = data.reason
         ret.refund_method = method
         ret.subtotal = round(subtotal, 2)
@@ -8497,6 +8544,9 @@ async def _apply_sales_return(
                         if b is not None:
                             await set_batch_quantity_atomic(
                                 db, batch_id=bid, new_qty=as_qty(b.quantity or 0) + qty,
+                                movement_type="return",
+                                source_type="sales_return",
+                                source_ref=ret.id,
                             )
                         else:
                             # Source lot since deleted — keep the count correct.

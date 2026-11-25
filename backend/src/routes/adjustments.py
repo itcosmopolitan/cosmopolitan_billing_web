@@ -1,7 +1,7 @@
 import json
 import re
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
+from src.date_utils import ist_today
 from src.document_numbering import (
     _counter_key,
     allocate_number,
@@ -56,6 +57,7 @@ class AdjustmentCreate(BaseModel):
     item_name: str
     new_qty: float = Field(..., ge=0)
     reason: str
+    adjustment_date: Optional[date] = None
     notes: Optional[str] = None
     batch_id: Optional[str] = None
     requested_by: str = "Staff"
@@ -84,6 +86,7 @@ class AdjustmentBatchCreate(BaseModel):
     child_counter_name: Optional[str] = None
     items: list[AdjustmentBatchLine] = Field(..., min_length=1, max_length=100)
     reason: str
+    adjustment_date: Optional[date] = None
     notes: Optional[str] = None
     requested_by: str = "Staff"
 
@@ -122,6 +125,7 @@ def _serialize(ar: AdjustmentRequest) -> dict:
         "new_qty": ar.new_qty,
         "delta": (ar.new_qty or 0) - (ar.before_qty or 0),
         "reason": ar.reason,
+        "adjustment_date": ar.adjustment_date.isoformat() if ar.adjustment_date else None,
         "notes": ar.notes,
         "batch_id": ar.batch_id,
         "status": status,
@@ -525,6 +529,8 @@ async def _approve_adjustment_record(
             reason=ar.reason or "Adjustment",
             notes=ar.notes,
             batch_id=ar.batch_id,
+            effective_date=ar.adjustment_date or ist_today(),
+            source_ref=ar.id,
         )
     except LookupError as e:
         raise HTTPException(404, str(e)) from e
@@ -561,6 +567,7 @@ async def _create_adjustment_record(
     item_name: str,
     new_qty: float,
     reason: str,
+    adjustment_date: date,
     notes: Optional[str],
     batch_id: Optional[str],
     requested_by: str,
@@ -586,6 +593,7 @@ async def _create_adjustment_record(
         before_qty=before,
         new_qty=as_qty(new_qty),
         reason=reason,
+        adjustment_date=adjustment_date,
         notes=notes,
         batch_id=batch_id,
         status=AdjustmentStatus.pending if direct_approval else AdjustmentStatus.draft,
@@ -656,6 +664,7 @@ async def create_adjustment(
                 item_name=data.item_name,
                 new_qty=data.new_qty,
                 reason=data.reason,
+                adjustment_date=data.adjustment_date or ist_today(),
                 notes=data.notes,
                 batch_id=data.batch_id,
                 requested_by=data.requested_by,
@@ -717,6 +726,7 @@ async def create_adjustment_batch(
                 item_name=line.item_name,
                 new_qty=line.new_qty,
                 reason=data.reason,
+                adjustment_date=data.adjustment_date or ist_today(),
                 notes=data.notes,
                 batch_id=line.batch_id,
                 requested_by=data.requested_by,
@@ -781,6 +791,8 @@ async def approve_adjustment(
             reason=ar.reason or "Adjustment",
             notes=ar.notes,
             batch_id=ar.batch_id,
+            effective_date=ar.adjustment_date or ist_today(),
+            source_ref=ar.id,
         )
     except LookupError as e:
         raise HTTPException(404, str(e)) from e

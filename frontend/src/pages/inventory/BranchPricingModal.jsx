@@ -369,6 +369,14 @@ export default function BranchPricingModal({
                 />
               </FormGroup>
             )}
+            <FormGroup label="Opening balance date">
+              <input
+                className="form-input"
+                type="date"
+                value={draft.opening_stock_date ?? ''}
+                onChange={(e) => patch('opening_stock_date', e.target.value)}
+              />
+            </FormGroup>
             <FormGroup label="Reorder level">
               <input
                 className="form-input"

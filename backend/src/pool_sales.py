@@ -18,6 +18,8 @@ from src.models import (
     ItemStock,
     PoolSaleAllocation,
     PoolSaleAllocationReversal,
+    SaleInvoice,
+    SalesReturn,
     StockPool,
 )
 from src.qty import as_qty
@@ -45,6 +47,17 @@ async def _reverse_pool_allocation(
     positive = qty_delta > 0
     qty = abs(qty_delta)
     tracked = allocation.source_batch_id is not None
+    if return_id:
+        return_date = (await db.execute(
+            select(SalesReturn.date).where(SalesReturn.id == return_id)
+        )).scalar_one_or_none()
+        effective_date = date.fromisoformat(return_date[:10]) if return_date else None
+    else:
+        invoice = (await db.execute(
+            select(SaleInvoice).where(SaleInvoice.number == invoice_number)
+        )).scalar_one_or_none()
+        invoice_date = (invoice.shipment_date or invoice.date) if invoice else None
+        effective_date = date.fromisoformat(invoice_date[:10]) if invoice_date else None
 
     if positive and remove_from_sale_branch:
         sale_movement_id = str(uuid.uuid4())
@@ -62,6 +75,7 @@ async def _reverse_pool_allocation(
                 source_ref=invoice_number,
                 created_by=created_by,
                 movement_id=sale_movement_id,
+                effective_date=effective_date,
             )
         else:
             await adjust_stock_atomic(
@@ -74,6 +88,7 @@ async def _reverse_pool_allocation(
                 source_ref=invoice_number,
                 created_by=created_by,
                 movement_id=sale_movement_id,
+                effective_date=effective_date,
             )
 
     if tracked:
@@ -109,6 +124,7 @@ async def _reverse_pool_allocation(
             source_ref=invoice_number,
             created_by=created_by,
             movement_id=owner_movement_id,
+            effective_date=effective_date,
         )
     else:
         delta = qty if positive else -qty
@@ -122,6 +138,7 @@ async def _reverse_pool_allocation(
             source_ref=invoice_number,
             created_by=created_by,
             movement_id=owner_movement_id,
+            effective_date=effective_date,
         )
 
     await db.flush()

@@ -22,6 +22,10 @@ def business_today() -> date:
     return datetime.now(_report_business_timezone()).date()
 
 
+def ist_today() -> date:
+    return datetime.now(ZoneInfo("Asia/Kolkata")).date()
+
+
 def business_day_bounds_utc(day: date) -> tuple[datetime, datetime]:
     business_tz = _report_business_timezone()
     start_local = datetime.combine(day, time.min, tzinfo=business_tz)

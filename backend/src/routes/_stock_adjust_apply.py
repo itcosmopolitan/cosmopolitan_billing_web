@@ -1,6 +1,7 @@
 """Apply an approved stock adjustment (shared by adjustments.approve)."""
 from __future__ import annotations
 
+from datetime import date
 from typing import Optional
 
 from sqlalchemy import select, text
@@ -24,6 +25,8 @@ async def apply_stock_adjustment(
     reason: str,
     notes: Optional[str] = None,
     batch_id: Optional[str] = None,
+    effective_date: Optional[date] = None,
+    source_ref: Optional[str] = None,
 ) -> dict:
     """Set stock to *new_qty* using the same rules as the legacy items.adjust endpoint."""
     if new_qty < 0:
@@ -31,7 +34,8 @@ async def apply_stock_adjustment(
 
     if batch_id:
         b = await set_batch_quantity_atomic(
-            db, batch_id=batch_id, new_qty=int(new_qty)
+            db, batch_id=batch_id, new_qty=int(new_qty),
+            effective_date=effective_date, source_ref=source_ref,
         )
         if not b:
             raise LookupError("Batch not found")
@@ -51,8 +55,9 @@ async def apply_stock_adjustment(
             new_qty=int(new_qty),
             movement_type="adjustment",
             source_type="adjustment",
-            source_ref=reason,
+            source_ref=source_ref or reason,
             notes=notes,
+            effective_date=effective_date,
         )
         return {"message": "Stock adjusted"}
 
@@ -74,8 +79,9 @@ async def apply_stock_adjustment(
             branch_id=branch_id,
             qty=delta,
             source_type="adjustment",
-            source_ref=reason,
+            source_ref=source_ref or reason,
             notes=notes,
+            effective_date=effective_date,
         )
     else:
         strategy = "fefo" if (item_flags and item_flags.expiry_tracking) else "fifo"
@@ -86,6 +92,10 @@ async def apply_stock_adjustment(
                 branch_id=branch_id,
                 qty=-delta,
                 strategy=strategy,
+                movement_type="adjustment",
+                source_type="adjustment",
+                source_ref=source_ref or reason,
+                effective_date=effective_date,
             )
         except ValueError:
             await db.execute(
@@ -102,8 +112,9 @@ async def apply_stock_adjustment(
                 new_qty=int(new_qty),
                 movement_type="adjustment",
                 source_type="adjustment",
-                source_ref=reason,
+                source_ref=source_ref or reason,
                 notes=notes or "Batch quantities reset after adjustment consumption failed",
+                effective_date=effective_date,
             )
 
     return {"message": "Stock adjusted"}

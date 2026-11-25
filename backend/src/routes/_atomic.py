@@ -13,16 +13,112 @@ against going negative on stock or paying past the invoice total.
 from __future__ import annotations
 
 import uuid
+from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import asc, func, select, text
+from sqlalchemy import asc, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.batch_dates import _today
 from src.db_dialect import pg_invoice_status_case, scalar_min
-from src.models import Item, ItemBatch, ItemStock, SaleInvoice
+from src.date_utils import ist_today
+from src.models import (
+    AdjustmentRequest,
+    ComplimentaryEntry,
+    GoodsReceiptNote,
+    Item,
+    ItemBatch,
+    ItemBranchConfig,
+    ItemStock,
+    PurchaseBill,
+    SaleInvoice,
+    SalesReturn,
+    StockTransfer,
+    VendorReturn,
+)
 from src.qty import as_qty, qty_eq
 from src.routes._stock_ledger import get_physical_qty, record_stock_movement
+
+
+def _as_business_date(value: object) -> Optional[date]:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str) and value:
+        try:
+            return date.fromisoformat(value[:10])
+        except ValueError:
+            return None
+    return None
+
+
+async def _movement_effective_date(
+    db: AsyncSession,
+    *,
+    item_id: str,
+    branch_id: str,
+    source_type: Optional[str],
+    source_ref: Optional[str],
+    effective_date: Optional[date],
+) -> date:
+    if effective_date is not None:
+        parsed = _as_business_date(effective_date)
+        if parsed is None:
+            raise ValueError("effective_date must be a valid calendar date")
+        return parsed
+
+    ref = str(source_ref or "")
+    source = (source_type or "").lower()
+    if source in {"grn", "grn_cancel"} and ref:
+        value = (await db.execute(
+            select(GoodsReceiptNote.date).where(GoodsReceiptNote.id == ref)
+        )).scalar_one_or_none()
+        if value is None:
+            value = (await db.execute(
+                select(PurchaseBill.date).where(PurchaseBill.id == ref)
+            )).scalar_one_or_none()
+        document_date = _as_business_date(value)
+        if document_date:
+            return document_date
+
+    model_field = None
+    lookup = None
+    if source in {"sale_invoice", "pool_sale", "sale_invoice_void"}:
+        lookup = or_(SaleInvoice.id == ref, SaleInvoice.number == ref) if ref else None
+        model_field = SaleInvoice.shipment_date
+    elif source in {"sales_return", "return"}:
+        model_field, lookup = SalesReturn.date, SalesReturn.id == ref
+    elif source.startswith("vendor_return"):
+        model_field, lookup = VendorReturn.date, VendorReturn.id == ref
+    elif source in {"transfer", "transfer_receive"}:
+        model_field, lookup = StockTransfer.recorded_date, StockTransfer.id == ref
+    elif source in {"complimentary", "complimentary_entry"}:
+        model_field, lookup = ComplimentaryEntry.date, ComplimentaryEntry.id == ref
+    elif source == "adjustment":
+        model_field, lookup = AdjustmentRequest.adjustment_date, AdjustmentRequest.id == ref
+    elif source == "opening":
+        model_field = ItemBranchConfig.opening_stock_date
+        lookup = (
+            ItemBranchConfig.item_id == item_id
+        ) & (
+            ItemBranchConfig.branch_id == branch_id
+        )
+
+    if model_field is not None and lookup is not None:
+        if source in {"sale_invoice", "pool_sale", "sale_invoice_void"}:
+            invoice = (await db.execute(select(SaleInvoice).where(lookup))).scalar_one_or_none()
+            if invoice is not None:
+                document_date = _as_business_date(invoice.shipment_date) or _as_business_date(invoice.date)
+                if document_date:
+                    return document_date
+        else:
+            value = (await db.execute(select(model_field).where(lookup))).scalar_one_or_none()
+            document_date = _as_business_date(value)
+            if document_date:
+                return document_date
+
+    return ist_today()
 
 
 def _movement_for_batch_source(source_type: str) -> tuple[str, str]:
@@ -50,6 +146,7 @@ async def clamp_stock_to_zero_with_ledger(
     batch_id: Optional[str] = None,
     created_by: Optional[str] = None,
     notes: Optional[str] = None,
+    effective_date: Optional[date] = None,
 ) -> float:
     """Oversell path: zero aggregate stock and record the actual delta drained."""
     current = await get_physical_qty(db, item_id=item_id, branch_id=branch_id)
@@ -70,6 +167,10 @@ async def clamp_stock_to_zero_with_ledger(
         before_qty=current,
         after_qty=0,
         movement_type=movement_type,
+        effective_date=await _movement_effective_date(
+            db, item_id=item_id, branch_id=branch_id, source_type=source_type,
+            source_ref=source_ref, effective_date=effective_date
+        ),
         source_type=source_type,
         source_ref=source_ref,
         notes=notes or "Oversell clamp to zero",
@@ -92,6 +193,7 @@ async def adjust_stock_atomic(
     movement_id: Optional[str] = None,
     allow_negative: bool = False,
     notes: Optional[str] = None,
+    effective_date: Optional[date] = None,
 ) -> float:
     """Apply `delta` to the (item_id, branch_id) stock row and return the new
     quantity. Creates the row if it doesn't exist. For negative deltas, refuses
@@ -171,6 +273,10 @@ async def adjust_stock_atomic(
         before_qty=before,
         after_qty=after,
         movement_type=movement_type,
+        effective_date=await _movement_effective_date(
+            db, item_id=item_id, branch_id=branch_id, source_type=source_type,
+            source_ref=source_ref, effective_date=effective_date
+        ),
         source_type=source_type,
         source_ref=source_ref,
         batch_id=batch_id,
@@ -199,6 +305,7 @@ async def set_stock_atomic(
     batch_id: Optional[str] = None,
     created_by: Optional[str] = None,
     notes: Optional[str] = None,
+    effective_date: Optional[date] = None,
 ) -> float:
     """Set absolute stock and record the resulting delta in the same transaction."""
     if new_qty < 0:
@@ -236,6 +343,10 @@ async def set_stock_atomic(
         before_qty=before,
         after_qty=new_qty,
         movement_type=movement_type,
+        effective_date=await _movement_effective_date(
+            db, item_id=item_id, branch_id=branch_id, source_type=source_type,
+            source_ref=source_ref, effective_date=effective_date
+        ),
         source_type=source_type,
         source_ref=source_ref,
         batch_id=batch_id,
@@ -289,6 +400,7 @@ async def add_batch_atomic(
     movement_id: Optional[str] = None,
     movement_source_type: Optional[str] = None,
     created_by: Optional[str] = None,
+    effective_date: Optional[date] = None,
 ) -> Optional[ItemBatch]:
     """Create a new batch row AND bump item_stock atomically. Returns the
     persisted ItemBatch (or None if qty <= 0). Caller must `await db.commit()`.
@@ -373,6 +485,7 @@ async def add_batch_atomic(
         batch_id=batch.id,
         movement_id=movement_id,
         created_by=created_by,
+        effective_date=effective_date,
     )
     return batch
 
@@ -413,6 +526,7 @@ async def consume_batches_atomic(
     source_ref: Optional[str] = None,
     created_by: Optional[str] = None,
     movement_id: Optional[str] = None,
+    effective_date: Optional[date] = None,
 ) -> list[dict]:
     """Deduct `qty` units across batches at (item_id, branch_id).
 
@@ -524,6 +638,7 @@ async def consume_batches_atomic(
             source_ref=source_ref,
             created_by=created_by,
             movement_id=movement_id,
+            effective_date=effective_date,
         )
         return consumed
 
@@ -592,6 +707,7 @@ async def consume_batches_atomic(
         source_ref=source_ref,
         created_by=created_by,
         movement_id=movement_id,
+        effective_date=effective_date,
     )
     return consumed
 
@@ -724,6 +840,11 @@ async def set_batch_quantity_atomic(
     *,
     batch_id: str,
     new_qty: float,
+    effective_date: Optional[date] = None,
+    movement_type: str = "adjustment",
+    source_type: Optional[str] = "adjustment",
+    source_ref: Optional[str] = None,
+    created_by: Optional[str] = None,
 ) -> Optional[ItemBatch]:
     """Absolute set on a single batch (used by per-batch stock adjustment).
     Adjusts item_stock by the delta. Returns the updated batch or None if not
@@ -747,6 +868,11 @@ async def set_batch_quantity_atomic(
                 delta=delta,
                 allow_negative=True,
                 batch_id=b.id,
+                movement_type=movement_type,
+                source_type=source_type,
+                source_ref=source_ref,
+                effective_date=effective_date,
+                created_by=created_by,
             )
         return b
     if not qty_eq(delta, 0):
@@ -760,6 +886,11 @@ async def set_batch_quantity_atomic(
                 branch_id=b.branch_id,
                 delta=delta,
                 batch_id=b.id,
+                movement_type=movement_type,
+                source_type=source_type,
+                source_ref=source_ref,
+                effective_date=effective_date,
+                created_by=created_by,
             )
         except ValueError:
             await set_stock_atomic(
@@ -769,6 +900,11 @@ async def set_batch_quantity_atomic(
                 new_qty=0,
                 batch_id=b.id,
                 notes="Aggregate stock clamped to zero after batch adjustment",
+                movement_type=movement_type,
+                source_type=source_type,
+                source_ref=source_ref,
+                effective_date=effective_date,
+                created_by=created_by,
             )
     return b
 

@@ -374,7 +374,7 @@ REPORT_CATEGORIES: list[dict[str, Any]] = [
                     _col("stock", "Stock", align="right", format="qty"),
                     _col("reserved_stock", "Reserved", align="right", format="qty"),
                     _col("available_qty", "Available", align="right", format="qty"),
-                    _col("stock_value", "Stock Value", align="right", format="currency"),
+                    _col("stock_value", "Stock Value (Current Cost)", align="right", format="currency"),
                 ],
             ),
             _report(

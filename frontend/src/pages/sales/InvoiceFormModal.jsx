@@ -309,6 +309,17 @@ export default function InvoiceFormModal({
               value={invoiceForm.invoiceDate}
               onChange={(v) => pif('invoiceDate', v)} />
           </FormGroup>
+          <FormGroup label="Shipment Date">
+            <input
+              className="form-input"
+              type="date"
+              value={invoiceForm.shipmentDate || ''}
+              onChange={(e) => pif('shipmentDate', e.target.value)}
+            />
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+              Blank uses the invoice date for stock movements.
+            </div>
+          </FormGroup>
         </div>
 
         <div className="invoice-form-payment">

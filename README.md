@@ -45,6 +45,23 @@ from creating a duplicate import.
 ### 📊 Reports
 - Sales Register · Purchase Register · GST Tax Summary
 - Stock Movement · Branch Comparison · Margin Analysis
+- Current Stock reconstructs as-of quantities from stock movement transaction dates; values use current item cost.
+
+### Stock movement date backfill
+
+`backend/scripts/backfill_stock_movement_effective_date.py` fills missing
+movement dates from linked documents where possible, otherwise using the
+movement's creation date in IST. It requires an explicit database URL and is
+read-only by default:
+
+```bash
+cd backend
+python3 scripts/backfill_stock_movement_effective_date.py \
+  --database-url '<explicit SQLAlchemy database URL>' --dry-run
+```
+
+Only use `--apply` after reviewing the dry-run counts and confirming the
+target database. Writes are committed in resumable batches of 5,000 by default.
 
 ### ⚙ Settings & Admin
 - Users & Roles (6 role types), branch management

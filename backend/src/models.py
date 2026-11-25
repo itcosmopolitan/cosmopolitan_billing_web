@@ -501,6 +501,7 @@ class ItemBranchConfig(Base):
     staff_pricing_mode     = Column(String, nullable=True)
     staff_discount_pct     = Column(Float, nullable=True)
     staff_price            = Column(Float, nullable=True)
+    opening_stock_date     = Column(Date, nullable=True)
     created_at     = Column(DateTime, default=datetime.utcnow)
     updated_at     = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -675,6 +676,7 @@ class SaleInvoice(Base):
     child_counter_name = Column(String, nullable=True)
     cashier       = Column(String)
     date          = Column(String, nullable=False)
+    shipment_date = Column(String, nullable=True)
     subtotal      = Column(Float, default=0)
     tax_total     = Column(Float, default=0)
     discount      = Column(Float, default=0)
@@ -1453,6 +1455,14 @@ class CustomerCreditEntry(Base):
 # Append-only audit of every physical stock change. Populated by _atomic helpers.
 class StockMovement(Base):
     __tablename__ = "stock_movements"
+    __table_args__ = (
+        Index(
+            "ix_stock_movements_item_branch_effective_date",
+            "item_id",
+            "branch_id",
+            "effective_date",
+        ),
+    )
     id             = Column(String, primary_key=True)
     item_id        = Column(String, ForeignKey("items.id"), nullable=False)
     branch_id      = Column(String, ForeignKey("branches.id"), nullable=False)
@@ -1462,6 +1472,7 @@ class StockMovement(Base):
     movement_type  = Column(String, nullable=False)
     source_type    = Column(String)
     source_ref     = Column(String)
+    effective_date = Column(Date, nullable=True)
     batch_id       = Column(String, ForeignKey("item_batches.id"), nullable=True)
     notes          = Column(Text)
     created_by     = Column(String)
@@ -1730,6 +1741,7 @@ class AdjustmentRequest(Base):
     before_qty       = Column(Float, default=0)
     new_qty          = Column(Float, nullable=False)
     reason           = Column(String)
+    adjustment_date  = Column(Date, nullable=True)
     notes            = Column(Text)
     batch_id         = Column(String, nullable=True)
     status           = Column(SAEnum(AdjustmentStatus), default=AdjustmentStatus.pending)

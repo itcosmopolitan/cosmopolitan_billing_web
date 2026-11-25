@@ -46,6 +46,7 @@ export const createBranchRow = (branch = null, overrides = {}) => {
     cost_price: '',
     selling_price: '',
     opening_stock: '',
+    opening_stock_date: '',
     reorder_level: '',
     available_stock: 0,
     // Empty mode → inherit catalog wholesale/staff.
@@ -75,6 +76,7 @@ export const branchRowFromApi = (br, taxRate) => {
       cost_price: convertEnteredTaxAmount(br.cost_price ?? '', 'exclusive', 'inclusive', taxRate) ?? '',
       selling_price: br.selling_price ?? '',
       opening_stock: '',
+      opening_stock_date: br.opening_stock_date || '',
       reorder_level: br.reorder_level ?? '',
       available_stock: br.available_stock ?? 0,
       wholesale_pricing_mode: wholesaleMode,
@@ -228,6 +230,7 @@ function branchConfigFields(bc, { includeOpeningStock = false, taxRate, priceTax
     cost_price: catalogExclusiveAmount(bc.cost_price, priceTaxMode, taxRate),
     selling_price: catalogInclusiveAmount(bc.selling_price, priceTaxMode, taxRate),
     reorder_level: bc.reorder_level === '' || bc.reorder_level == null ? null : Number(bc.reorder_level),
+    opening_stock_date: bc.opening_stock_date || null,
     ...branchCategoryPayload(bc, { taxRate, priceTaxMode }),
   }
   if (includeOpeningStock) {

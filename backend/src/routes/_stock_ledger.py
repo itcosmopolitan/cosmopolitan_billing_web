@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import date
 from typing import Optional
 
 from sqlalchemy import and_, func, select
@@ -74,6 +75,7 @@ async def record_stock_movement(
     before_qty: float,
     after_qty: float,
     movement_type: str,
+    effective_date: date,
     source_type: Optional[str] = None,
     source_ref: Optional[str] = None,
     batch_id: Optional[str] = None,
@@ -91,6 +93,7 @@ async def record_stock_movement(
         before_qty=as_qty(before_qty),
         after_qty=as_qty(after_qty),
         movement_type=movement_type,
+        effective_date=effective_date,
         source_type=source_type,
         source_ref=source_ref,
         batch_id=batch_id,

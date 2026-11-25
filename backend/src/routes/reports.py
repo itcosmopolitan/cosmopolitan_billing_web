@@ -4,11 +4,12 @@ import uuid
 from datetime import date, datetime, time, timedelta
 from collections import defaultdict
 from typing import Any, Literal, Optional
+from zoneinfo import ZoneInfo
 
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from sqlalchemy import String, and_, case, cast, func, literal, or_, select, Numeric
+from sqlalchemy import Date, String, and_, case, cast, func, literal, or_, select, Numeric
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 from sqlalchemy.orm.attributes import flag_modified
@@ -17,8 +18,6 @@ from src import config
 from src.database import get_db
 from src.date_utils import (
     MAX_REPORT_DATE_RANGE_DAYS,
-    business_day_bounds_utc,
-    business_today,
     parse_date_range,
 )
 from src.gst_display import (
@@ -3479,17 +3478,61 @@ async def current_stock(
     summary_only: bool = False,
     db: AsyncSession = Depends(get_db),
 ):
-    as_of = None
+    requested_as_of = None
     if date_to or date_from:
-        as_of = _normalize_as_of_date(date_to or date_from)
+        requested_as_of = _normalize_as_of_date(date_to or date_from)
+    today_ist = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+    as_of = requested_as_of or today_ist
+    reserved_is_current = as_of < today_ist
 
     conds = []
-    stock_branch = _eq_or_in(ItemStock.branch_id, branch_id)
-    if stock_branch is not None:
-        conds.append(stock_branch)
     if search:
         conds.append(Item.name.ilike(f"%{search}%"))
 
+    if db.get_bind().dialect.name == "postgresql":
+        created_day = cast(
+            func.timezone(
+                "Asia/Kolkata",
+                func.timezone("UTC", StockMovement.created_at),
+            ),
+            Date,
+        )
+    else:
+        created_day = func.date(
+            StockMovement.created_at,
+            "+5 hours",
+            "+30 minutes",
+        )
+    movement_day = func.coalesce(StockMovement.effective_date, created_day)
+    movement_totals = (
+        select(
+            StockMovement.item_id.label("item_id"),
+            StockMovement.branch_id.label("branch_id"),
+            func.sum(StockMovement.delta).label("ledger_quantity"),
+        )
+        .group_by(StockMovement.item_id, StockMovement.branch_id)
+        .subquery()
+    )
+    movements_after_as_of_sq = (
+        select(
+            StockMovement.item_id.label("item_id"),
+            StockMovement.branch_id.label("branch_id"),
+            func.sum(StockMovement.delta).label("quantity_change"),
+        )
+        .where(movement_day > as_of)
+        .group_by(StockMovement.item_id, StockMovement.branch_id)
+        .subquery()
+    )
+    keys = (
+        select(ItemStock.item_id.label("item_id"), ItemStock.branch_id.label("branch_id"))
+        .union(
+            select(StockMovement.item_id, StockMovement.branch_id)
+        )
+        .subquery()
+    )
+    stock_branch = _eq_or_in(keys.c.branch_id, branch_id)
+    if stock_branch is not None:
+        conds.append(stock_branch)
     reserved_sq = (
         select(
             StockReservation.item_id.label("item_id"),
@@ -3500,100 +3543,69 @@ async def current_stock(
         .group_by(StockReservation.item_id, StockReservation.branch_id)
         .subquery()
     )
-    reserved_expr = func.coalesce(reserved_sq.c.reserved_qty, 0)
-
-    reserved_is_current = as_of is not None and as_of < business_today()
-    if reserved_is_current:
-        _, next_start_utc = business_day_bounds_utc(as_of)
-        movements_after_as_of_sq = (
-            select(
-                StockMovement.item_id.label("item_id"),
-                StockMovement.branch_id.label("branch_id"),
-                func.sum(StockMovement.delta).label("quantity_change"),
-            )
-            .where(
-                StockMovement.created_at >= next_start_utc
-            )
-            .group_by(StockMovement.item_id, StockMovement.branch_id)
-            .subquery()
+    reserved_expr = (
+        literal(0.0)
+        if reserved_is_current
+        else func.coalesce(reserved_sq.c.reserved_qty, 0)
+    )
+    current_qty_expr = func.coalesce(
+        ItemStock.quantity,
+        movement_totals.c.ledger_quantity,
+        0,
+    )
+    stock_expr = current_qty_expr - func.coalesce(movements_after_as_of_sq.c.quantity_change, 0)
+    stock_value_expr = case(
+        (stock_expr > 0, stock_expr * func.coalesce(Item.cost_price, 0)),
+        else_=literal(0.0),
+    )
+    available_expr = stock_expr - reserved_expr
+    base = (
+        select(
+            Item.id.label("item_id"),
+            Item.sku.label("product_code"),
+            Item.name.label("product_name"),
+            Category.name.label("category"),
+            Branch.name.label("branch"),
+            stock_expr.label("stock"),
+            reserved_expr.label("reserved_stock"),
+            available_expr.label("available_qty"),
+            stock_value_expr.label("stock_value"),
+            literal("valued at current cost").label("valuation_basis"),
         )
-        stock_expr = (
-            ItemStock.quantity
-            - func.coalesce(movements_after_as_of_sq.c.quantity_change, 0)
-        )
-        stock_value_expr = case(
-            (
-                stock_expr > 0,
-                stock_expr * func.coalesce(Item.cost_price, 0),
+        .select_from(keys)
+        .join(Item, Item.id == keys.c.item_id)
+        .join(Branch, Branch.id == keys.c.branch_id)
+        .join(Category, Category.id == Item.category_id, isouter=True)
+        .outerjoin(
+            ItemStock,
+            and_(
+                ItemStock.item_id == keys.c.item_id,
+                ItemStock.branch_id == keys.c.branch_id,
             ),
-            else_=literal(0.0),
         )
-        available_expr = stock_expr - reserved_expr
-        base = (
-            select(
-                Item.id.label("item_id"),
-                Item.sku.label("product_code"),
-                Item.name.label("product_name"),
-                Category.name.label("category"),
-                Branch.name.label("branch"),
-                stock_expr.label("stock"),
-                reserved_expr.label("reserved_stock"),
-                available_expr.label("available_qty"),
-                stock_value_expr.label("stock_value"),
-            )
-            .select_from(ItemStock)
-            .join(Item, Item.id == ItemStock.item_id)
-            .join(Branch, Branch.id == ItemStock.branch_id)
-            .join(Category, Category.id == Item.category_id, isouter=True)
-            .outerjoin(
-                movements_after_as_of_sq,
-                and_(
-                    movements_after_as_of_sq.c.item_id == ItemStock.item_id,
-                    movements_after_as_of_sq.c.branch_id == ItemStock.branch_id,
-                ),
-            )
-            .join(
-                reserved_sq,
-                and_(
-                    reserved_sq.c.item_id == ItemStock.item_id,
-                    reserved_sq.c.branch_id == ItemStock.branch_id,
-                ),
-                isouter=True,
-            )
-            .where(and_(*conds) if conds else True)
+        .outerjoin(
+            movement_totals,
+            and_(
+                movement_totals.c.item_id == keys.c.item_id,
+                movement_totals.c.branch_id == keys.c.branch_id,
+            ),
         )
-    else:
-        # Oversold (negative) quantity is shown as-is, but valued at zero.
-        stock_value_expr = case(
-            (ItemStock.quantity > 0, ItemStock.quantity * func.coalesce(Item.cost_price, 0)),
-            else_=literal(0.0),
+        .outerjoin(
+            movements_after_as_of_sq,
+            and_(
+                movements_after_as_of_sq.c.item_id == keys.c.item_id,
+                movements_after_as_of_sq.c.branch_id == keys.c.branch_id,
+            ),
         )
-        stock_expr = ItemStock.quantity
-        available_expr = ItemStock.quantity - reserved_expr
-        base = (
-            select(
-                Item.sku.label("product_code"),
-                Item.name.label("product_name"),
-                Category.name.label("category"),
-                Branch.name.label("branch"),
-                stock_expr.label("stock"),
-                reserved_expr.label("reserved_stock"),
-                available_expr.label("available_qty"),
-                stock_value_expr.label("stock_value"),
-            )
-            .join(Item, Item.id == ItemStock.item_id)
-            .join(Branch, Branch.id == ItemStock.branch_id)
-            .join(Category, Category.id == Item.category_id, isouter=True)
-            .join(
-                reserved_sq,
-                and_(
-                    reserved_sq.c.item_id == ItemStock.item_id,
-                    reserved_sq.c.branch_id == ItemStock.branch_id,
-                ),
-                isouter=True,
-            )
-            .where(and_(*conds) if conds else True)
+        .outerjoin(
+            reserved_sq,
+            and_(
+                reserved_sq.c.item_id == keys.c.item_id,
+                reserved_sq.c.branch_id == keys.c.branch_id,
+            ),
         )
+        .where(and_(*conds) if conds else True)
+    )
 
     sort_map = {
         "product_code": Item.sku,
@@ -3630,6 +3642,7 @@ async def current_stock(
                 "reserved_stock": float(summary_row.reserved_stock or 0),
                 "available_qty": float(summary_row.available_qty or 0),
                 "stock_value": float(summary_row.stock_value or 0),
+                "valuation_basis": "valued at current cost",
             }],
             total,
             0,
