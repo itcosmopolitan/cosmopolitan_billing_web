@@ -202,6 +202,51 @@ async def _cancel_grn_rejects_insufficient_stock() -> None:
         await db.close()
 
 
+async def _cancel_grn_allows_restored_untracked_stock() -> None:
+    db = await _build_session()
+    try:
+        user, grn = await _seed_receipt(db, tracked=False)
+        await cancel_bill("bill-1", db=db, user=user)
+        db.add_all([
+            StockMovement(
+                id="invoice-stock-out",
+                item_id="item-1",
+                branch_id="branch-1",
+                delta=-5,
+                before_qty=30,
+                after_qty=25,
+                movement_type="sale",
+                source_type="sale_invoice",
+                source_ref="invoice-1",
+                created_at=grn.created_at + timedelta(seconds=1),
+            ),
+            StockMovement(
+                id="invoice-stock-restored",
+                item_id="item-1",
+                branch_id="branch-1",
+                delta=5,
+                before_qty=25,
+                after_qty=30,
+                movement_type="sale_reversal",
+                source_type="sale_invoice",
+                source_ref="invoice-1",
+                created_at=grn.created_at + timedelta(seconds=2),
+            ),
+        ])
+        await db.commit()
+
+        await cancel_grn(grn.id, db=db, user=user)
+
+        _cost, quantity = await _read_cost_and_stock(db)
+        status = (await db.execute(
+            select(GoodsReceiptNote.status).where(GoodsReceiptNote.id == grn.id)
+        )).scalar_one()
+        assert quantity == pytest.approx(10)
+        assert status == GRNStatus.cancelled
+    finally:
+        await db.close()
+
+
 async def _edit_direct_bill_recalculates_receipt_weighted_average() -> None:
     db = await _build_session()
     try:
@@ -348,6 +393,10 @@ def test_grn_cancellation_reverses_branch_weighted_average() -> None:
 
 def test_grn_cancellation_rejects_when_stock_is_unavailable() -> None:
     asyncio.run(_cancel_grn_rejects_insufficient_stock())
+
+
+def test_grn_cancellation_allows_restored_untracked_stock() -> None:
+    asyncio.run(_cancel_grn_allows_restored_untracked_stock())
 
 
 def test_direct_bill_quantity_edit_updates_receipt_and_weighted_average() -> None:

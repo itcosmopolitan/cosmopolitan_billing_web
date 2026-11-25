@@ -5874,7 +5874,9 @@ async def cancel_grn(
         if live and live_status != InvoiceStatus.cancelled.value:
             raise HTTPException(400, "Cannot cancel GRN with a live linked bill — cancel the bill first")
         grn.converted_bill_id = None
-    if grn_status == "received" and await grn_batches_consumed(db, grn.id):
+    if grn_status == "received" and await grn_batches_consumed(
+        db, grn.id, check_untracked_movements=False,
+    ):
         raise HTTPException(400, "Cannot cancel GRN — stock from this receipt has already been consumed")
     if grn_status == "received":
         try:

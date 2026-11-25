@@ -612,13 +612,20 @@ async def reverse_grn_stock(
     return removed
 
 
-async def grn_batches_consumed(db: AsyncSession, grn_id: str) -> bool:
-    """True if receipt stock was consumed, including pooled untracked stock."""
+async def grn_batches_consumed(
+    db: AsyncSession,
+    grn_id: str,
+    *,
+    check_untracked_movements: bool = True,
+) -> bool:
+    """True if receipt stock was consumed, including optionally pooled stock."""
     batches = (await db.execute(
         select(ItemBatch).where(ItemBatch.source_ref == grn_id)
     )).scalars().all()
     if any(as_qty(b.quantity or 0) < as_qty(b.initial_qty or 0) for b in batches):
         return True
+    if not check_untracked_movements:
+        return False
 
     grn = (await db.execute(
         select(GoodsReceiptNote).where(GoodsReceiptNote.id == grn_id)
